@@ -1,0 +1,45 @@
+# file: setup.yml
+#
+# Creates administrator local user accounts and configures sudoers.
+---
+
+- hosts: localhost
+  vars_files:
+  - setup_vars.yml
+  tasks:
+  - name: Install dependencies
+    with_items:
+    - libselinux-python
+    dnf:
+      name: "{{ item }}"
+      state: present
+
+  - name: Create local user accounts
+    with_items: "{{ local_users | default([]) }}"
+    when: item.fullname is defined
+    user:
+      name: "{{ item.user }}"
+      comment: "{{ item.fullname }}"
+      append: yes
+      groups: "{{ item.groups | default('') }}"
+      shell: "{{ item.shell | default('/bin/bash') }}"
+      generate_ssh_key: yes
+      ssh_key_bits: "{{ ssh_key_bits | default(4096) }}"
+      ssh_key_type: "{{ ssh_key_type | default('rsa') }}"
+      ssh_key_comment: "{{ item.user }}@{{ ansible_fqdn }}_{{ ansible_date_time.iso8601 | replace(':', '') }}"
+      state: "{{ item.state | default('present') }}"
+
+  - name: Authorize local SSH connections for some configuration management modules
+    with_items: "{{ local_users | default([]) }}"
+    when: item.fullname is defined and
+          item.state | default('present') == 'present'
+    authorized_key:
+      user: "{{ item.user }}"
+      key: "{{ lookup('file', '/home/{{ item.user }}/.ssh/id_rsa.pub') }}"
+
+  - name: Configure sudoers
+    with_items: "{{ sudoers_lines | default([]) }}"
+    lineinfile: dest="/etc/sudoers" state=present
+                regexp='{{ item.regexp }}'
+                line='{{ item.line }}'
+                validate="visudo -qcf %s"

@@ -1,0 +1,10 @@
+.bash_history
+.bash_logout
+.bash_profile
+.bashrc
+.cshrc
+.lesshst
+.ssh/
+.tcshrc
+anaconda-ks.cfg
+*.retry
