@@ -1,0 +1,21 @@
+# file: setup_vars.yml
+---
+
+local_users:
+- user: "sam"
+  fullname: "Sakari Maaranen"
+  groups: "wheel"
+  shell: "/bin/bash"
+  state: "present"
+
+sudoers_lines:
+- regexp: '^%wheel\s+ALL='
+  line:   '%wheel ALL=(ALL) NOPASSWD:ALL'
+# maintain SSH agent when using sudo
+- regexp: '^Defaults\s+env_keep'
+  line:   'Defaults    env_keep += "SSH_AUTH_SOCK"'
+- regexp: '^Defaults\s+secure_path'
+  line:   'Defaults    secure_path = /sbin:/bin:/usr/sbin:/usr/bin:/usr/local/sbin:/usr/local/bin'
+# sudo without teletype terminal
+- regexp: '^Defaults\s+!?requiretty'
+  line:   'Defaults    !requiretty'
