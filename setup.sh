@@ -11,6 +11,7 @@ dnf install -y ansible git
 cd /root
 git init .
 git remote add -t \* -f origin https://github.com/sakaal/setup.git
-git checkout master
+git fetch --all
+git reset --hard origin/master
 ansible-playbook -v setup.yml
 rm -f setup.retry
