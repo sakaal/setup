@@ -1,6 +1,6 @@
 # file: setup.yml
 #
-# Creates administrator local user accounts and configures sudoers.
+# Ansible playbook that creates administrator local user accounts and configures sudoers.
 ---
 
 - hosts: localhost

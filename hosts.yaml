@@ -1,0 +1,10 @@
+# file: hosts.yaml
+#
+# Ansible inventory file
+---
+
+local:
+  vars:
+    ansible_connection: local
+  hosts:
+    localhost

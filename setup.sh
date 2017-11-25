@@ -14,5 +14,5 @@ git remote add -t \* -f origin https://github.com/sakaal/setup.git
 git fetch --all
 git reset --hard origin/master
 chmod og-wx setup.sh
-ansible-playbook -v setup.yml
+ansible-playbook -v -i hosts.yaml setup.yaml
 rm -f setup.retry
