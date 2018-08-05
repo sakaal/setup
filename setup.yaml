@@ -1,11 +1,11 @@
-# file: setup.yml
+# file: setup.yaml
 #
 # Ansible playbook that creates administrator local user accounts and configures sudoers.
 ---
 
 - hosts: localhost
   vars_files:
-  - setup_vars.yml
+  - setup_vars.yaml
   tasks:
   - name: Install dependencies
     with_items:
