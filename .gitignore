@@ -1,10 +1,16 @@
+.ansible
 .bash_history
 .bash_logout
 .bash_profile
 .bashrc
 .cshrc
+.gitconfig
 .lesshst
 .ssh/
 .tcshrc
+.wget-hsts
 anaconda-ks.cfg
+dead.letter
+*.img
 *.retry
+*~
