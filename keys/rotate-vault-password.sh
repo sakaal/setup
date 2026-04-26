@@ -85,24 +85,28 @@ if [[ ${#NEW_PASS} -ne 26 ]]; then
   exit 1
 fi
 
-# --- Confirm before overwriting an existing item ---
+# --- Write to Pass ---
+# username = the vault id itself (so it shows in Pass UI as the
+# distinguishing label for this entry)
+# note     = "Ansible Vault ID" (so search hits these items by purpose)
 
 if pass-cli item view --vault-name "${VAULT}" --item-title "${ITEM}" >/dev/null 2>&1; then
-  printf 'Item %s/%s already exists. Replace its password? [y/N] ' "${VAULT}" "${ITEM}"
-  read -r confirm
-  [[ "${confirm}" == "y" ]] || { err "Aborted. No changes made."; exit 1; }
-  echo "Updating existing item ${VAULT}/${ITEM}..."
+  echo "Rotating password for ${VAULT}/${ITEM} (username and note preserved)..."
   pass-cli item update \
     --vault-name "${VAULT}" \
     --item-title "${ITEM}" \
     --field "password=${NEW_PASS}"
 else
-  echo "Creating new item ${VAULT}/${ITEM}..."
+  echo "Creating new item ${VAULT}/${ITEM} (username=${VAULT_ID}, note=Ansible Vault ID)..."
   pass-cli item create login \
     --vault-name "${VAULT}" \
     --title "${ITEM}" \
-    --username "ansible-vault" \
+    --username "${VAULT_ID}" \
     --password "${NEW_PASS}"
+  pass-cli item update \
+    --vault-name "${VAULT}" \
+    --item-title "${ITEM}" \
+    --field "note=Ansible Vault ID"
 fi
 
 NEW_PASS=""
