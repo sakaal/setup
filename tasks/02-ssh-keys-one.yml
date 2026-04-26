@@ -1,0 +1,99 @@
+---
+# 02-ssh-keys-one.yml — deploy a single SSH keypair from Pass.
+# Loop body called from 02-ssh-keys.yml. ssh_title is the Pass item
+# title, which is also the canonical filename in ~/.ssh/.
+
+- name: "[{{ ssh_title }}] Stat ~/.ssh/{{ ssh_title }} (private)"
+  ansible.builtin.stat:
+    path: "{{ home_dir }}/.ssh/{{ ssh_title }}"
+  register: priv_stat
+
+- name: "[{{ ssh_title }}] Stat ~/.ssh/{{ ssh_title }}.pub"
+  ansible.builtin.stat:
+    path: "{{ home_dir }}/.ssh/{{ ssh_title }}.pub"
+  register: pub_stat
+
+- name: "[{{ ssh_title }}] Read public_key from Pass"
+  ansible.builtin.command:
+    cmd: pass-cli item view --vault-name "Setup Keys" --item-title "{{ ssh_title }}" --field public_key
+  register: pass_pub
+  changed_when: false
+
+- name: "[{{ ssh_title }}] Slurp local .pub (if present)"
+  ansible.builtin.slurp:
+    src: "{{ home_dir }}/.ssh/{{ ssh_title }}.pub"
+  register: local_pub_raw
+  when: pub_stat.stat.exists
+
+# Safety: if private key is present but .pub is missing, derive the
+# public key from the private to verify it matches Pass before we
+# touch anything. ssh-keygen -P '' fails fast on passphrase-protected
+# keys (we don't want to prompt during an unattended run).
+
+- name: "[{{ ssh_title }}] Derive public key from local private (if .pub missing, private present)"
+  ansible.builtin.command:
+    cmd: ssh-keygen -y -P "" -f "{{ home_dir }}/.ssh/{{ ssh_title }}"
+  register: derived_pub
+  changed_when: false
+  failed_when: false
+  when:
+    - priv_stat.stat.exists
+    - not pub_stat.stat.exists
+
+# Resolve the local public-key text from whichever source is available
+# (slurped .pub takes precedence; derived from private as fallback).
+- name: "[{{ ssh_title }}] Compute local public-key text"
+  ansible.builtin.set_fact:
+    local_pub_text: >-
+      {{
+        (local_pub_raw.content | b64decode) if pub_stat.stat.exists
+        else (derived_pub.stdout if (priv_stat.stat.exists and derived_pub.rc | default(1) == 0) else '')
+      }}
+
+- name: "[{{ ssh_title }}] Halt if local private key cannot be verified (likely passphrase-protected)"
+  ansible.builtin.fail:
+    msg: |
+      Local private key ~/.ssh/{{ ssh_title }} exists but ssh-keygen could not
+      derive a public key from it (likely passphrase-protected). Cannot verify
+      against Pass without prompting. Resolve manually before re-running:
+      either unlock the key, remove the local file, or add it to ssh-agent.
+  when:
+    - priv_stat.stat.exists
+    - not pub_stat.stat.exists
+    - derived_pub.rc | default(1) != 0
+
+- name: "[{{ ssh_title }}] Halt if local key differs from Pass"
+  ansible.builtin.fail:
+    msg: |
+      Local SSH key {{ ssh_title }} differs from what's in Pass.
+        Local: {{ (local_pub_text.split()[:2]) | join(' ') }}
+        Pass:  {{ (pass_pub.stdout.split()[:2]) | join(' ') }}
+      Refusing to overwrite. Resolve manually before re-running.
+  when:
+    - local_pub_text | length > 0
+    - (local_pub_text.split()[:2]) | join(' ') != (pass_pub.stdout.split()[:2]) | join(' ')
+
+- name: "[{{ ssh_title }}] Read private_key from Pass (only when deploying)"
+  ansible.builtin.command:
+    cmd: pass-cli item view --vault-name "Setup Keys" --item-title "{{ ssh_title }}" --field private_key
+  register: pass_priv
+  changed_when: false
+  no_log: true
+  when: not priv_stat.stat.exists
+
+- name: "[{{ ssh_title }}] Write private key (mode 0600)"
+  ansible.builtin.copy:
+    dest: "{{ home_dir }}/.ssh/{{ ssh_title }}"
+    content: "{{ pass_priv.stdout }}\n"
+    mode: '0600'
+  no_log: true
+  when: not priv_stat.stat.exists
+
+- name: "[{{ ssh_title }}] Write public key (mode 0644)"
+  ansible.builtin.copy:
+    dest: "{{ home_dir }}/.ssh/{{ ssh_title }}.pub"
+    content: "{{ pass_pub.stdout }}\n"
+    mode: '0644'
+  when: not pub_stat.stat.exists
+
+...

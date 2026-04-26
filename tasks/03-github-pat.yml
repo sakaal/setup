@@ -1,0 +1,61 @@
+---
+# 03-github-pat.yml — deploy GitHub Personal Access Token for git
+# credential and gh auth.
+#
+# If `github-pat` is in Pass:
+#   - Render ~/bin/git-credential-github (Pass-fetching helper)
+#   - Configure git: credential.https://github.com.helper = <abs path>
+#   - Run `gh auth login --with-token` (drops token in
+#     ~/.config/gh/hosts.yml so the gh CLI is authenticated)
+
+- name: Stage 03 — GitHub PAT (skipped if not in Pass)
+  when: setup_github_pat_present
+  block:
+    - name: Ensure ~/bin exists
+      ansible.builtin.file:
+        path: "{{ home_dir }}/bin"
+        state: directory
+        mode: '0755'
+
+    - name: Deploy git-credential-github helper
+      ansible.builtin.template:
+        src: git-credential-github.j2
+        dest: "{{ home_dir }}/bin/git-credential-github"
+        mode: '0700'
+
+    - name: Configure git credential helper for https://github.com
+      community.general.git_config:
+        scope: global
+        name: credential.https://github.com.helper
+        value: "{{ home_dir }}/bin/git-credential-github"
+
+    - name: Check whether gh is already authenticated for github.com
+      ansible.builtin.command:
+        cmd: gh auth status --hostname github.com
+      register: gh_auth_status
+      changed_when: false
+      failed_when: false
+
+    - name: Read GitHub PAT from Pass (only when gh auth missing)
+      ansible.builtin.command:
+        cmd: pass-cli item view "pass://Setup Keys/github-pat/password"
+      register: github_pat_value
+      changed_when: false
+      no_log: true
+      when: gh_auth_status.rc != 0
+
+    - name: Run gh auth login --with-token (when gh auth missing)
+      ansible.builtin.command:
+        cmd: gh auth login --with-token --hostname github.com
+        stdin: "{{ github_pat_value.stdout }}"
+      no_log: true
+      changed_when: true
+      when: gh_auth_status.rc != 0
+
+    - name: Stage 03 summary
+      ansible.builtin.debug:
+        msg:
+          - "git credential helper for https://github.com → {{ home_dir }}/bin/git-credential-github"
+          - "gh auth: {{ 'already authenticated' if gh_auth_status.rc == 0 else 'logged in fresh from Pass' }}"
+
+...

@@ -1,0 +1,78 @@
+---
+# 01-discover.yml — gather information about what is in the Proton Pass
+# "Setup Keys" vault. Categorizes items by name pattern so subsequent
+# stages can iterate only the items relevant to them.
+#
+# Security note: `pass-cli item list` returns full content including
+# passwords. To avoid passwords ever entering ansible's register
+# variables (which can leak via -v output, callback plugins, fact
+# caching), this stage extracts only the titles via a pipe through
+# python before the data reaches ansible. Subsequent stages fetch each
+# secret on-demand with `no_log: true`.
+
+- name: Verify "Setup Keys" vault exists in Proton Pass
+  ansible.builtin.command:
+    cmd: pass-cli vault list --output json
+  register: pass_vaults_raw
+  changed_when: false
+  check_mode: false
+
+- name: Assert "Setup Keys" vault is present
+  ansible.builtin.assert:
+    that:
+      - "'Setup Keys' in ((pass_vaults_raw.stdout | from_json).vaults | map(attribute='name') | list)"
+    fail_msg: |
+      The "Setup Keys" vault was not found in your Proton Pass account.
+      Create it via the Proton Pass app, or:
+        pass-cli vault create --name "Setup Keys"
+
+- name: List item titles in "Setup Keys" (titles only — passwords stay in pass-cli)
+  ansible.builtin.shell:
+    cmd: |
+      set -o pipefail
+      pass-cli item list "Setup Keys" --output json \
+        | python3 -c 'import json, sys
+      d = json.load(sys.stdin)
+      for item in d.get("items", []):
+          if item.get("state") == "Active":
+              print(item["content"]["title"])
+      '
+    executable: /bin/bash
+  register: pass_titles
+  changed_when: false
+  check_mode: false
+
+- name: Categorize discovered items by purpose
+  ansible.builtin.set_fact:
+    setup_item_titles: "{{ pass_titles.stdout_lines }}"
+    setup_ssh_titles: "{{ pass_titles.stdout_lines | select('match', '^id_') | list }}"
+    setup_github_pat_present: "{{ 'github-pat' in pass_titles.stdout_lines }}"
+    setup_vault_pass_titles: "{{ pass_titles.stdout_lines | select('match', '^vault_pass-') | list }}"
+    setup_unknown_titles: >-
+      {{
+        pass_titles.stdout_lines
+        | reject('match', '^id_')
+        | reject('equalto', 'github-pat')
+        | reject('match', '^vault_pass-')
+        | list
+      }}
+
+- name: Discovery summary
+  ansible.builtin.debug:
+    msg:
+      - "Items in Setup Keys: {{ setup_item_titles | length }}"
+      - "SSH keypairs to deploy: {{ setup_ssh_titles | length }}"
+      - "GitHub PAT present: {{ setup_github_pat_present }}"
+      - "Ansible Vault password items: {{ setup_vault_pass_titles | length }} ({{ setup_vault_pass_titles | map('regex_replace', '^vault_pass-', '') | list }})"
+      - "Unknown items (will be ignored): {{ setup_unknown_titles | default([]) | length }}{{ ' — ' ~ setup_unknown_titles | join(', ') if setup_unknown_titles else '' }}"
+
+- name: Warn on unrecognized items
+  ansible.builtin.debug:
+    msg: |
+      Found {{ setup_unknown_titles | length }} item(s) in "Setup Keys" that don't match
+      any known pattern (id_*, github-pat, vault_pass-*): {{ setup_unknown_titles | join(', ') }}
+      These are ignored. If they should be deployed, add discovery rules in
+      tasks/01-discover.yml and a corresponding deploy stage.
+  when: setup_unknown_titles | length > 0
+
+...
