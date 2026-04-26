@@ -1,0 +1,41 @@
+---
+# 06-repos.yml — ensure each repo from workspace.repos is cloned at
+# ~/workspace/<name>/. Per-entry behavior:
+#
+#   target absent              → clone (using `version` if specified,
+#                                 else the remote's default branch)
+#   target is a git repo,
+#     remote matches manifest  → skip silently (already done)
+#   target is a git repo,
+#     remote differs           → log a warning, skip (don't clobber)
+#   target dir exists, no .git → log a warning, skip (don't clobber)
+#
+# Per safe-idempotent stance, only the "absent → clone" case takes
+# any action. All other cases preserve existing local state.
+
+- name: Stat ~/workspace/workspace.repos
+  ansible.builtin.stat:
+    path: "{{ home_dir }}/workspace/workspace.repos"
+  register: manifest_stat
+
+- name: Stage 06 — clone repos from manifest (skipped if manifest absent)
+  when: manifest_stat.stat.exists
+  block:
+    - name: Read workspace.repos manifest
+      ansible.builtin.include_vars:
+        file: "{{ home_dir }}/workspace/workspace.repos"
+        name: workspace_manifest
+
+    - name: Process each manifest entry
+      ansible.builtin.include_tasks: 06-repos-one.yml
+      loop: "{{ workspace_manifest.repositories | dict2items }}"
+      loop_control:
+        loop_var: manifest_entry
+        label: "{{ manifest_entry.key }}"
+
+    - name: Stage 06 summary
+      ansible.builtin.debug:
+        msg:
+          - "Workspace repos in manifest: {{ workspace_manifest.repositories | length }}"
+
+...

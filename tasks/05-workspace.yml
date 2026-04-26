@@ -1,0 +1,119 @@
+---
+# 05-workspace.yml — deploy ~/workspace/ as a working tree of
+# sakaal/workspace. Three-case logic on the existence and remote of
+# ~/workspace/.git:
+#
+#   Case 1: exists and origin matches sakaal/workspace
+#           → trust; fetch (quiet); surface drift via `git status`.
+#   Case 2: exists but origin points elsewhere
+#           → fatal halt; do not modify.
+#   Case 3: ~/workspace/.git absent (regardless of whether ~/workspace
+#           itself exists or has unrelated content already)
+#           → lay non-destructively: mkdir if needed (preserve existing
+#             dir's mode), then git init + remote add + fetch +
+#             checkout -B main origin/main. The checkout step refuses
+#             to overwrite untracked local files that would conflict
+#             with files tracked in origin/main, so any pre-existing
+#             content stays put. Sibling directories are untouched —
+#             the whitelist .gitignore in sakaal/workspace makes them
+#             invisible to git tracking after deployment.
+
+- name: Stat ~/workspace/.git
+  ansible.builtin.stat:
+    path: "{{ home_dir }}/workspace/.git"
+  register: workspace_git_stat
+
+- name: Get current ~/workspace origin URL (when .git exists)
+  ansible.builtin.command:
+    cmd: git -C "{{ home_dir }}/workspace" remote get-url origin
+  register: workspace_origin
+  changed_when: false
+  failed_when: false
+  when: workspace_git_stat.stat.exists
+
+- name: Determine if remote matches sakaal/workspace (SSH or HTTPS form)
+  ansible.builtin.set_fact:
+    workspace_remote_ok: >-
+      {{
+        workspace_origin is defined
+        and workspace_origin.rc | default(1) == 0
+        and (workspace_origin.stdout | default('')) is regex('github\.com[:/]sakaal/workspace(\.git)?$')
+      }}
+  when: workspace_git_stat.stat.exists
+
+# Case 2 — fatal on unexpected remote.
+- name: Halt — ~/workspace/.git points to an unexpected remote
+  ansible.builtin.fail:
+    msg: |
+      ~/workspace/.git exists but origin does not match sakaal/workspace.
+        Current origin: {{ workspace_origin.stdout | default('(none)') }}
+        Expected:       github.com[:/]sakaal/workspace (SSH or HTTPS, with or without .git)
+      Refusing to modify. Investigate and resolve manually before re-running.
+  when:
+    - workspace_git_stat.stat.exists
+    - not (workspace_remote_ok | default(false))
+
+# Case 1 — trust, fetch quietly, surface any drift.
+- name: Fetch ~/workspace from origin (quiet)
+  ansible.builtin.command:
+    cmd: git -C "{{ home_dir }}/workspace" fetch --quiet
+  changed_when: false
+  when:
+    - workspace_git_stat.stat.exists
+    - workspace_remote_ok | default(false)
+
+- name: Read ~/workspace status
+  ansible.builtin.command:
+    cmd: git -C "{{ home_dir }}/workspace" status --short --branch
+  register: workspace_status
+  changed_when: false
+  when:
+    - workspace_git_stat.stat.exists
+    - workspace_remote_ok | default(false)
+
+- name: Report ~/workspace drift (only if non-clean)
+  ansible.builtin.debug:
+    msg: "{{ workspace_status.stdout_lines }}"
+  when:
+    - workspace_git_stat.stat.exists
+    - workspace_remote_ok | default(false)
+    - workspace_status.stdout_lines | length > 1
+
+# Case 3 — lay non-destructively onto ~/workspace/.
+- name: Ensure ~/workspace exists (no mode change if already there)
+  ansible.builtin.file:
+    path: "{{ home_dir }}/workspace"
+    state: directory
+  when: not workspace_git_stat.stat.exists
+
+- name: git init in ~/workspace (case 3)
+  ansible.builtin.command:
+    cmd: git -C "{{ home_dir }}/workspace" init
+  when: not workspace_git_stat.stat.exists
+  changed_when: true
+
+- name: Add origin remote (case 3)
+  ansible.builtin.command:
+    cmd: git -C "{{ home_dir }}/workspace" remote add origin git@github.com:sakaal/workspace.git
+  when: not workspace_git_stat.stat.exists
+  changed_when: true
+
+- name: Fetch main from origin (case 3)
+  ansible.builtin.command:
+    cmd: git -C "{{ home_dir }}/workspace" fetch origin main
+  when: not workspace_git_stat.stat.exists
+  changed_when: true
+
+- name: Check out main (creates local branch from origin/main, lays files non-destructively)
+  ansible.builtin.command:
+    cmd: git -C "{{ home_dir }}/workspace" checkout -B main origin/main
+  when: not workspace_git_stat.stat.exists
+  changed_when: true
+
+- name: Set upstream tracking on main
+  ansible.builtin.command:
+    cmd: git -C "{{ home_dir }}/workspace" branch --set-upstream-to=origin/main main
+  when: not workspace_git_stat.stat.exists
+  changed_when: true
+
+...

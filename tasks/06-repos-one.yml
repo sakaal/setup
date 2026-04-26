@@ -1,0 +1,78 @@
+---
+# 06-repos-one.yml — process a single manifest entry. Loop body called
+# from 06-repos.yml. manifest_entry has .key (local dir name) and
+# .value (vcstool entry: type, url, optional version).
+#
+# Classifications and actions:
+#   absent             → clone
+#   git, remote ok     → silent skip (already done)
+#   git, remote wrong  → warning, skip (don't clobber)
+#   non-git dir        → warning, skip (don't clobber)
+
+- name: "[{{ manifest_entry.key }}] Stat target dir"
+  ansible.builtin.stat:
+    path: "{{ home_dir }}/workspace/{{ manifest_entry.key }}"
+  register: target_dir
+
+- name: "[{{ manifest_entry.key }}] Stat target .git"
+  ansible.builtin.stat:
+    path: "{{ home_dir }}/workspace/{{ manifest_entry.key }}/.git"
+  register: target_git
+
+- name: "[{{ manifest_entry.key }}] Get current origin (when .git exists)"
+  ansible.builtin.command:
+    cmd: git -C "{{ home_dir }}/workspace/{{ manifest_entry.key }}" remote get-url origin
+  register: target_origin
+  changed_when: false
+  failed_when: false
+  when: target_git.stat.exists
+
+# Normalize both URLs to "<owner>/<repo>" by stripping protocol prefix
+# and trailing .git, so SSH and HTTPS forms compare equal.
+- name: "[{{ manifest_entry.key }}] Compare normalized remotes"
+  ansible.builtin.set_fact:
+    remote_ok: >-
+      {{
+        target_origin.rc | default(1) == 0
+        and (target_origin.stdout
+             | regex_replace('^(git@github\.com:|https://github\.com/)', '')
+             | regex_replace('\.git$', ''))
+            ==
+            (manifest_entry.value.url
+             | regex_replace('^(git@github\.com:|https://github\.com/)', '')
+             | regex_replace('\.git$', ''))
+      }}
+  when: target_git.stat.exists
+
+- name: "[{{ manifest_entry.key }}] Warn — existing repo has a different remote"
+  ansible.builtin.debug:
+    msg: |
+      [{{ manifest_entry.key }}] {{ home_dir }}/workspace/{{ manifest_entry.key }}/.git already exists
+      but its origin differs from the manifest:
+        existing: {{ target_origin.stdout | default('(none)') }}
+        expected: {{ manifest_entry.value.url }}
+      Skipping (continuing). Resolve manually if you want it conformant.
+  when:
+    - target_git.stat.exists
+    - not (remote_ok | default(false))
+
+- name: "[{{ manifest_entry.key }}] Warn — directory exists but is not a git repo"
+  ansible.builtin.debug:
+    msg: |
+      [{{ manifest_entry.key }}] {{ home_dir }}/workspace/{{ manifest_entry.key }}/ exists
+      but is not a git working copy. Skipping (continuing).
+      Resolve manually: remove the directory, or convert it to a git repo.
+  when:
+    - target_dir.stat.exists
+    - not target_git.stat.exists
+
+- name: "[{{ manifest_entry.key }}] Clone (target absent)"
+  ansible.builtin.git:
+    repo: "{{ manifest_entry.value.url }}"
+    dest: "{{ home_dir }}/workspace/{{ manifest_entry.key }}"
+    version: "{{ manifest_entry.value.version | default(omit) }}"
+    update: false
+    clone: true
+  when: not target_dir.stat.exists
+
+...

@@ -1,0 +1,93 @@
+---
+# 02-ssh-keys.yml — deploy SSH keypairs from Proton Pass to ~/.ssh/.
+#
+# For each item in setup_ssh_titles (Pass items prefixed `id_`):
+#   - Read public_key from Pass (cheap, no secret)
+#   - Compare to ~/.ssh/<title>.pub if present
+#   - Absent → deploy private + public files with proper perms
+#   - Present and matches (algo + base64 portion) → no-op
+#   - Present and differs → halt (per safe-idempotent stance)
+#
+# After all keys are deployed, switch ~/workspace/setup origin from
+# HTTPS to SSH so daily git operations use the agent rather than PAT.
+
+- name: Ensure ~/.ssh exists with restrictive perms
+  ansible.builtin.file:
+    path: "{{ home_dir }}/.ssh"
+    state: directory
+    mode: '0700'
+  when: setup_ssh_titles | length > 0
+
+- name: Deploy each SSH keypair from Pass
+  ansible.builtin.include_tasks: 02-ssh-keys-one.yml
+  loop: "{{ setup_ssh_titles }}"
+  loop_control:
+    loop_var: ssh_title
+    label: "{{ ssh_title }}"
+
+# Establish the user's standard SSH config layout: a top-level
+# ~/.ssh/config that pulls in any per-host snippets from ~/.ssh/config.d/.
+# Domain/project-specific snippets are added to config.d/ later (manual
+# step, out of bootstrap scope).
+
+- name: Ensure ~/.ssh/config.d/ directory exists
+  ansible.builtin.file:
+    path: "{{ home_dir }}/.ssh/config.d"
+    state: directory
+    mode: '0700'
+
+- name: Ensure ~/.ssh/config has 'Include config.d/*' at top
+  ansible.builtin.lineinfile:
+    path: "{{ home_dir }}/.ssh/config"
+    line: "Include config.d/*"
+    insertbefore: BOF
+    create: true
+    mode: '0600'
+
+# Pre-populate known_hosts with github.com's public host keys so the
+# first SSH connection (e.g. stage 06's clones) doesn't stall on an
+# interactive host-key prompt. Per key type so each is idempotent.
+
+- name: Capture github.com SSH host keys (strip ssh-keyscan banner comment)
+  ansible.builtin.shell:
+    cmd: "set -o pipefail; ssh-keyscan -T 10 -t {{ item }} github.com 2>/dev/null | grep -v '^#' || true"
+    executable: /bin/bash
+  register: gh_host_keys
+  changed_when: false
+  failed_when: false
+  loop: [ed25519, rsa, ecdsa]
+
+- name: Add github.com host keys to ~/.ssh/known_hosts
+  ansible.builtin.known_hosts:
+    name: github.com
+    key: "{{ item.stdout }}"
+    state: present
+  loop: "{{ gh_host_keys.results }}"
+  loop_control:
+    label: "{{ item.item }}"
+  when:
+    - item.rc == 0
+    - item.stdout | length > 0
+
+# After SSH keys are in place, switch the setup repo's origin to SSH
+# so daily git operations use the agent. Conditional: only switch if
+# the remote is still the HTTPS form we cloned with (don't clobber
+# user customization).
+
+- name: Get current ~/workspace/setup origin URL
+  ansible.builtin.command:
+    cmd: git -C "{{ home_dir }}/workspace/setup" remote get-url origin
+  register: setup_origin
+  changed_when: false
+  failed_when: false
+
+- name: Switch ~/workspace/setup origin from HTTPS to SSH
+  ansible.builtin.command:
+    cmd: git -C "{{ home_dir }}/workspace/setup" remote set-url origin git@github.com:sakaal/setup.git
+  when:
+    - setup_ssh_titles | length > 0
+    - setup_origin.rc == 0
+    - setup_origin.stdout == "https://github.com/sakaal/setup.git"
+  changed_when: true
+
+...
