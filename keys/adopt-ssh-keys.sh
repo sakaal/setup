@@ -12,14 +12,15 @@
 #     - year + month:     2019-04, 201904
 #     - date only:        2019-04-01, 20190401
 #     - date + time:      2019-04-01T14:30, 20190401T1430
-#     - second precision: 2019-04-01T14:30:00, 20190401T143000
+#     - second precision: 2019-04-01T14:30:00, 20190401T143000, 20140819T054009Z
 #     - underscore separator: 2019-04-01_14:30 (T or _ both accepted)
+#     - optional trailing Z (UTC indicator): 2014-08-19T054009Z
 #
 # Examples that match:
 #   id_rsa_alice@hostA_2024-01
 #   id_rsa_alice@workstation_2024-06-30
 #   id_ed25519_alice@laptop_20240412T1430
-#   id_ecdsa_alice@server_2026-04-26T15:30:00
+#   id_ecdsa_alice@server_2014-08-19T054009Z
 #
 # For each matching private key file:
 #   - Validate it's an unencrypted SSH private key
@@ -104,7 +105,7 @@ import os, re, sys
 ssh = os.environ["SSH_DIR"]
 excl = [p for p in os.environ.get("EXCLUDES", "").split("\n") if p]
 
-dt = r"\d{4}-?\d{2}(?:-?\d{2}(?:[T_]\d{2}:?\d{2}(?::?\d{2})?)?)?"
+dt = r"\d{4}-?\d{2}(?:-?\d{2}(?:[T_]\d{2}:?\d{2}(?::?\d{2})?[Zz]?)?)?"
 rx = re.compile(rf"^id_[a-z][a-z0-9]*_[a-zA-Z][\w-]*@[\w.-]+_{dt}$")
 
 for name in sorted(os.listdir(ssh)):
