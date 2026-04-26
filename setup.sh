@@ -36,6 +36,29 @@ ok()   { printf '  \xe2\x9c\x93 %s\n' "$*"; }
 warn() { printf '  ! %s\n' "$*" >&2; }
 fail() { printf '  \xe2\x9c\x97 %s\n' "$*" >&2; exit 1; }
 
+# maybe_ff_update <repo-dir> <branch>
+# Fast-forward update of a local working copy *only* when it is safe:
+# repo is a git working tree, fetch succeeds, working tree is clean, HEAD
+# is on the named branch, HEAD is an ancestor of origin/<branch>, and
+# there's actually something to advance. If any check fails (dirty,
+# detached, on a different branch, non-FF, fetch failure), accept the
+# working copy as-is and return silently.
+maybe_ff_update() {
+  local repo="$1"
+  local branch="$2"
+  [[ -d "$repo/.git" ]] || return 0
+  git -C "$repo" fetch --quiet origin "$branch" 2>/dev/null || return 0
+  git -C "$repo" diff-index --quiet HEAD 2>/dev/null || return 0
+  [[ "$(git -C "$repo" symbolic-ref --short HEAD 2>/dev/null)" == "$branch" ]] || return 0
+  git -C "$repo" merge-base --is-ancestor HEAD "origin/$branch" 2>/dev/null || return 0
+  local local_sha remote_sha
+  local_sha="$(git -C "$repo" rev-parse HEAD 2>/dev/null)"
+  remote_sha="$(git -C "$repo" rev-parse "origin/$branch" 2>/dev/null)"
+  [[ "$local_sha" == "$remote_sha" ]] && return 0
+  info "Fast-forwarding $repo → origin/$branch"
+  git -C "$repo" merge --ff-only "origin/$branch" --quiet 2>/dev/null || return 0
+}
+
 usage() {
   cat <<'EOF'
 setup.sh — personal workspace bootstrap.
@@ -170,7 +193,9 @@ else
   # Case 3: standalone (curl-piped or non-git local copy). Self-bootstrap
   # by `git clone`-ing sakaal/setup into the canonical location.
   if [[ -e "$CANONICAL" ]]; then
-    info "Canonical $CANONICAL already exists — re-executing from there"
+    info "Canonical $CANONICAL already exists"
+    maybe_ff_update "$CANONICAL" master
+    info "Re-executing from $CANONICAL/setup.sh"
     exec bash "$CANONICAL/setup.sh" "$@"
   fi
 
