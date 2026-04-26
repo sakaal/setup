@@ -53,31 +53,26 @@
     - workspace_git_stat.stat.exists
     - not (workspace_remote_ok | default(false))
 
-# Case 1 — trust, fetch quietly, surface any drift.
-- name: Fetch ~/workspace from origin (quiet)
-  ansible.builtin.command:
-    cmd: git -C "{{ home_dir }}/workspace" fetch --quiet
-  changed_when: false
+# Case 1 — trust, fetch quietly. Auto-fast-forward only when the
+# working copy is clean and on main and FF is possible; otherwise
+# accept the working copy as-is (silent — operator owns local state).
+- name: Fetch + maybe fast-forward ~/workspace
+  ansible.builtin.shell:
+    cmd: |
+      cd "{{ home_dir }}/workspace"
+      git fetch --quiet origin main 2>/dev/null || exit 0
+      git diff-index --quiet HEAD 2>/dev/null || exit 0
+      [[ "$(git symbolic-ref --short HEAD 2>/dev/null)" == "main" ]] || exit 0
+      git merge-base --is-ancestor HEAD origin/main 2>/dev/null || exit 0
+      [[ "$(git rev-parse HEAD)" = "$(git rev-parse origin/main)" ]] && exit 0
+      git merge --ff-only origin/main --quiet
+      echo ff-applied
+    executable: /bin/bash
+  register: workspace_ff
+  changed_when: workspace_ff.stdout == "ff-applied"
   when:
     - workspace_git_stat.stat.exists
     - workspace_remote_ok | default(false)
-
-- name: Read ~/workspace status
-  ansible.builtin.command:
-    cmd: git -C "{{ home_dir }}/workspace" status --short --branch
-  register: workspace_status
-  changed_when: false
-  when:
-    - workspace_git_stat.stat.exists
-    - workspace_remote_ok | default(false)
-
-- name: Report ~/workspace drift (only if non-clean)
-  ansible.builtin.debug:
-    msg: "{{ workspace_status.stdout_lines }}"
-  when:
-    - workspace_git_stat.stat.exists
-    - workspace_remote_ok | default(false)
-    - workspace_status.stdout_lines | length > 1
 
 # Case 3 — lay non-destructively onto ~/workspace/.
 - name: Ensure ~/workspace exists (no mode change if already there)
