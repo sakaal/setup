@@ -79,9 +79,9 @@ and only fills in what's missing or out of date.
 
 ```
 setup.sh           Entry point — installs prerequisites, hands off to ansible
-setup.yaml         Ansible orchestrator — imports tasks/01..06 sequentially
+setup.yaml         Ansible orchestrator — imports tasks/01..07 sequentially
 hosts.yaml         Localhost-only inventory
-tasks/             Per-stage task files (01-discover ... 06-repos)
+tasks/             Per-stage task files (01-discover ... 07-repos)
 templates/         Jinja2 templates rendered by stages
 keys/              Manually-triggered utility scripts (rotate-github-pat,
                    rotate-vault-password, adopt-ssh-keys)

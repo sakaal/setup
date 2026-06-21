@@ -1,5 +1,5 @@
 ---
-# 05-workspace.yml — deploy ~/workspace/ as a working tree of
+# 06-workspace.yml — deploy ~/workspace/ as a working tree of
 # sakaal/workspace. Three-case logic on the existence and remote of
 # ~/workspace/.git:
 #

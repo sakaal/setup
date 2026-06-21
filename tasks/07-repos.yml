@@ -1,5 +1,5 @@
 ---
-# 06-repos.yml — ensure each repo from workspace.repos is cloned at
+# 07-repos.yml — ensure each repo from workspace.repos is cloned at
 # ~/workspace/<name>/. Per-entry behavior:
 #
 #   target absent              → clone (using `version` if specified,
@@ -27,7 +27,7 @@
         name: workspace_manifest
 
     - name: Process each manifest entry
-      ansible.builtin.include_tasks: 06-repos-one.yml
+      ansible.builtin.include_tasks: 07-repos-one.yml
       loop: "{{ workspace_manifest.repositories | dict2items }}"
       loop_control:
         loop_var: manifest_entry

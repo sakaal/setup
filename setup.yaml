@@ -31,12 +31,16 @@
       ansible.builtin.import_tasks: tasks/04-vault-password.yml
       tags: [ansible-vault]
 
+    - name: Configure local git settings
+      ansible.builtin.import_tasks: tasks/05-git-config.yml
+      tags: [git-config]
+
     - name: Deploy ~/workspace working tree
-      ansible.builtin.import_tasks: tasks/05-workspace.yml
+      ansible.builtin.import_tasks: tasks/06-workspace.yml
       tags: [workspace]
 
     - name: Clone workspace repos
-      ansible.builtin.import_tasks: tasks/06-repos.yml
+      ansible.builtin.import_tasks: tasks/07-repos.yml
       tags: [repos]
 
 ...

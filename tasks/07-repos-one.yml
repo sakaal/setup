@@ -1,6 +1,6 @@
 ---
-# 06-repos-one.yml — process a single manifest entry. Loop body called
-# from 06-repos.yml. manifest_entry has .key (local dir name) and
+# 07-repos-one.yml — process a single manifest entry. Loop body called
+# from 07-repos.yml. manifest_entry has .key (local dir name) and
 # .value (vcstool entry: type, url, optional version).
 #
 # Classifications and actions:

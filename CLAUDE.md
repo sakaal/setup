@@ -77,7 +77,7 @@ own directory, use `$SCRIPT_DIR` (resolved early in `setup.sh`).
 
 ```
 setup.sh           Bash entry point — installs prereqs, hands off to ansible
-setup.yaml         Ansible orchestrator — imports tasks/01..06 sequentially
+setup.yaml         Ansible orchestrator — imports tasks/01..07 sequentially
 hosts.yaml         Localhost-only inventory
 tasks/NN-name.yml  Per-stage task files; numbered with two digits
 templates/         Jinja2 templates rendered by stages

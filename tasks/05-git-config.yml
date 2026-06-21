@@ -1,0 +1,18 @@
+---
+# 05-git-config.yml — machine-local git configuration not tied to any single
+# credential (those are stages 02–04).  Currently: deploy a global gitignore so
+# OS/editor cruft (.DS_Store, swap files, …) never enters a repo on this
+# machine, and point git's global core.excludesfile at it.
+
+- name: Deploy global gitignore
+  ansible.builtin.template:
+    src: gitignore_global.j2
+    dest: "{{ home_dir }}/.gitignore_global"
+    mode: "0644"
+
+- name: Point git's global core.excludesfile at the global gitignore
+  community.general.git_config:
+    scope: global
+    name: core.excludesfile
+    value: "{{ home_dir }}/.gitignore_global"
+...
