@@ -43,4 +43,8 @@
       ansible.builtin.import_tasks: tasks/07-repos.yml
       tags: [repos]
 
+    - name: Configure shell environment baseline
+      ansible.builtin.import_tasks: tasks/08-shell-env.yml
+      tags: [shell-env]
+
 ...
