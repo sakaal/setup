@@ -5,8 +5,8 @@
 # machine, and point git's global core.excludesfile at it.
 
 - name: Deploy global gitignore
-  ansible.builtin.template:
-    src: gitignore_global.j2
+  ansible.builtin.copy:
+    src: gitignore_global
     dest: "{{ home_dir }}/.gitignore_global"
     mode: "0644"
 
