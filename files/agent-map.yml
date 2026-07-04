@@ -1,0 +1,170 @@
+---
+# ~/.config/ai/agent-map.yml
+#
+# Managed by setup (tasks/09-ai-config.yml). Do not edit by hand; change the
+# source in the setup repo instead.
+#
+# Single manifest of where each AI assistant on this machine keeps its
+# configuration, and how setup keeps it in sync from the agent-neutral
+# sources under ~/.config/ai/.
+#
+# Sync methods:
+#   link     — symlink the tool's file to the hub file. User scope,
+#              for tools that never rewrite the file in place.
+#   import   — a tiny stub that @imports the hub file, for tools that
+#              DO rewrite their own instruction file in place (e.g. Claude Code).
+#   generate — render the hub mcp.json into the
+#              tool's own format via ~/bin/ai-sync.
+#   ignore   — app-managed, or no standalone file to sync; the tool consumes
+#              the shared config only at project scope (or not at all).
+#
+# Config classes:
+#   instructions — always-loaded guidance; hub: ~/.config/ai/AGENTS.md
+#   mcp          — MCP server definitions;  hub: ~/.config/ai/mcp.json
+#   settings, commands, subagents, memory — per-tool; intentionally not synced.
+
+# The two shared sources every sync method below refers to. Both are symlinks
+# into the workspace repo's ai/ directory (readlink shows the target). Edit
+# through these paths, never the per-tool copies.
+hub:
+  instructions: ~/.config/ai/AGENTS.md
+  mcp: ~/.config/ai/mcp.json
+
+# The vendor-neutral AGENTS.md convention (agents.md) is the backbone: the
+# hub instructions file is itself an AGENTS.md, so tools that read that
+# name natively need only a symlink — or nothing at all at project scope.
+standards:
+  agents_md:
+    description: >-
+      Vendor-neutral instructions filename. Read natively by a growing set of
+      tools (Codex, Cursor, …). Because the hub instructions file is an
+      AGENTS.md, those tools sync with a plain symlink or read it directly.
+
+tools:
+
+  claude-code:
+    name: Claude Code
+    user:
+      instructions:
+        path: ~/.claude/CLAUDE.md
+        sync: import
+        description: >-
+          Global instructions. Claude edits this file when it saves memory, so
+          use a one-line @import stub of the hub AGENTS.md, not a symlink.
+      mcp:
+        path: ~/.claude.json
+        format: json
+        key: mcpServers
+        sync: generate
+        description: User-scope MCP servers, merged under the mcpServers key.
+      settings:
+        path: ~/.claude/settings.json
+        sync: ignore
+      commands:
+        path: ~/.claude/commands/
+        sync: ignore
+      subagents:
+        path: ~/.claude/agents/
+        sync: ignore
+    project:
+      instructions:
+        path: CLAUDE.md
+        sync: import
+        description: Per-repo instructions; @import the repo's AGENTS.md.
+      mcp:
+        path: .mcp.json
+        format: json
+        key: mcpServers
+        sync: generate
+
+  openai-codex:
+    name: OpenAI Codex CLI
+    user:
+      instructions:
+        path: ~/.codex/AGENTS.md
+        sync: link
+        description: Global instructions; symlink to the hub AGENTS.md.
+      mcp:
+        path: ~/.codex/config.toml
+        format: toml
+        table: mcp_servers
+        sync: generate
+        description: >-
+          MCP servers live under [mcp_servers.<name>] tables inside config.toml.
+      settings:
+        path: ~/.codex/config.toml
+        sync: ignore
+    project:
+      instructions:
+        path: AGENTS.md
+        sync: link
+        description: Read natively; this is the standard filename.
+
+  gemini-cli:
+    name: Gemini CLI
+    user:
+      instructions:
+        path: ~/.gemini/GEMINI.md
+        sync: link
+        description: >-
+          Global instructions; symlink to the hub AGENTS.md. Alternative:
+          set contextFileName to AGENTS.md in ~/.gemini/settings.json.
+      mcp:
+        path: ~/.gemini/settings.json
+        format: json
+        key: mcpServers
+        sync: generate
+      settings:
+        path: ~/.gemini/settings.json
+        sync: ignore
+    project:
+      instructions:
+        path: GEMINI.md
+        sync: link
+
+  cursor:
+    name: Cursor
+    user:
+      instructions:
+        path: null
+        sync: ignore
+        description: >-
+          User Rules are app-managed (stored in Cursor's settings, no file).
+          Shared instructions reach Cursor at project scope via AGENTS.md.
+      mcp:
+        path: ~/.cursor/mcp.json
+        format: json
+        key: mcpServers
+        sync: generate
+    project:
+      instructions:
+        path: AGENTS.md
+        sync: link
+        description: Cursor reads AGENTS.md natively.
+      mcp:
+        path: .cursor/mcp.json
+        format: json
+        key: mcpServers
+        sync: generate
+
+  github-copilot:
+    name: GitHub Copilot
+    user:
+      instructions:
+        path: null
+        sync: ignore
+        description: >-
+          Personal instructions live in IDE user settings, not a standalone
+          file. Shared instructions reach Copilot at project scope.
+      mcp:
+        path: null
+        sync: ignore
+        description: >-
+          MCP is configured in the editor (e.g. VS Code mcp.json); the path
+          varies by editor and OS, so it is not machine-synced here.
+    project:
+      instructions:
+        path: .github/copilot-instructions.md
+        sync: import
+        description: Point the repo's Copilot instructions at its AGENTS.md.
+...

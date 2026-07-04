@@ -1,0 +1,89 @@
+---
+# 09-ai-link-one.yml — wire ONE user-scope instruction file to the hub
+# AGENTS.md (~/.config/ai/AGENTS.md, a symlink into the workspace repo),
+# non-destructively. Loop body from 09-ai-sync.yml. `link` has:
+#   dir     — the tool's config dir; if absent the tool isn't present → skip
+#   path    — the instruction file to create / point at the hub
+#   method  — 'symlink', or 'import' (@import stub) for tools that rewrite it
+#
+# Decision (only when the tool dir exists):
+#   target absent, or an empty file       → create the symlink / stub
+#   already the correct symlink / stub     → no-op (idempotent)
+#   anything else (a file with content)    → record conflict; do NOT touch it
+
+- name: "[{{ link.path }}] Stat tool config dir"
+  ansible.builtin.stat:
+    path: "{{ link.dir }}"
+  register: link_dir
+
+- name: "[{{ link.path }}] Present tool — wire instruction file"
+  when: link_dir.stat.exists
+  block:
+    - name: "[{{ link.path }}] Stat target (do not follow symlinks)"
+      ansible.builtin.stat:
+        path: "{{ link.path }}"
+        follow: false
+      register: link_tgt
+
+    - name: "[{{ link.path }}] Read existing regular file"
+      ansible.builtin.slurp:
+        src: "{{ link.path }}"
+      register: link_slurp
+      when:
+        - link_tgt.stat.exists
+        - not (link_tgt.stat.islnk | default(false))
+
+    - name: "[{{ link.path }}] Compute hub target, stub, and current body"
+      ansible.builtin.set_fact:
+        link_hub: "{{ home_dir }}/.config/ai/AGENTS.md"
+        link_stub: "@{{ home_dir }}/.config/ai/AGENTS.md"
+        link_body: >-
+          {{ (link_slurp.content | b64decode)
+             if (link_tgt.stat.exists and not (link_tgt.stat.islnk | default(false)))
+             else '' }}
+
+    - name: "[{{ link.path }}] Determine action (noop / create / conflict)"
+      ansible.builtin.set_fact:
+        link_action: >-
+          {{
+            'noop'
+              if (
+                (link_tgt.stat.islnk | default(false)
+                 and (link_tgt.stat.lnk_target | default('')) == link_hub)
+                or (link.method == 'import'
+                    and link_tgt.stat.exists
+                    and not (link_tgt.stat.islnk | default(false))
+                    and (link_body | trim) == link_stub)
+              )
+            else 'create'
+              if (
+                not link_tgt.stat.exists
+                or (not (link_tgt.stat.islnk | default(false)) and (link_body | trim) == '')
+              )
+            else 'conflict'
+          }}
+
+    - name: "[{{ link.path }}] Record conflict (left untouched)"
+      ansible.builtin.set_fact:
+        ai_link_conflicts: "{{ ai_link_conflicts + [link.path] }}"
+      when: link_action == 'conflict'
+
+    - name: "[{{ link.path }}] Create @import stub"
+      ansible.builtin.copy:
+        dest: "{{ link.path }}"
+        content: "{{ link_stub }}\n"
+        mode: "0644"
+      when:
+        - link_action == 'create'
+        - link.method == 'import'
+
+    - name: "[{{ link.path }}] Create symlink → hub AGENTS.md"
+      ansible.builtin.file:
+        src: "{{ link_hub }}"
+        dest: "{{ link.path }}"
+        state: link
+        force: true
+      when:
+        - link_action == 'create'
+        - link.method == 'symlink'
+...

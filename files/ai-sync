@@ -1,0 +1,189 @@
+#!/usr/bin/env python3
+#
+# ai-sync — render the canonical MCP server list into each AI assistant present
+# on this machine, non-destructively. Deployed by setup; do not edit — edit
+# setup's source (files/ai-sync) instead.
+#
+# Source of truth: ~/.config/ai/mcp.json — a JSON object with an "mcpServers"
+# map of <name> -> command / args / env (see agent-map.yml for which tools it
+# is rendered into, and how).
+#
+# Behaviour is strictly ADD-ONLY: for each server listed in mcp.json it is
+# added to a tool only if that tool has no server of the same name. An existing
+# same-named entry is left exactly as-is (reported as "in sync" if identical,
+# "differs" if not) — this never overwrites hand-tuned config, and never deletes
+# entries the tool already has. Re-run after editing mcp.json; inert while the
+# list is empty. Uses only the standard library (works on Python 3.9+).
+
+import json
+import os
+import re
+import sys
+
+# The report lines use the repo's severity glyphs (→ ! ✗); force UTF-8 output
+# so they never trip a non-UTF-8 locale (bash's printf writes raw bytes, this
+# is the Python equivalent).
+for _stream in (sys.stdout, sys.stderr):
+    try:
+        _stream.reconfigure(encoding="utf-8")
+    except (AttributeError, ValueError):
+        pass
+
+HOME = os.path.expanduser("~")
+SRC = os.path.join(HOME, ".config", "ai", "mcp.json")
+
+changed = []
+conflicts = []
+insync = []
+
+
+def load_servers():
+    try:
+        with open(SRC, encoding="utf-8") as fh:
+            data = json.load(fh)
+    except FileNotFoundError:
+        return dict()
+    except (ValueError, OSError) as exc:
+        sys.stderr.write("✗ error: cannot read %s: %s\n" % (SRC, exc))
+        sys.exit(1)
+    servers = data.get("mcpServers")
+    return servers if isinstance(servers, dict) else dict()
+
+
+def sync_json(path, key, servers, create_if_missing):
+    if os.path.exists(path):
+        try:
+            with open(path, encoding="utf-8") as fh:
+                text = fh.read()
+            data = json.loads(text) if text.strip() else dict()
+        except (ValueError, OSError) as exc:
+            sys.stderr.write("! skip %s: cannot parse (%s)\n" % (path, exc))
+            return
+    elif create_if_missing:
+        data = dict()
+    else:
+        return
+
+    if not isinstance(data, dict):
+        sys.stderr.write("! skip %s: top level is not an object\n" % path)
+        return
+
+    existing = data.get(key)
+    if not isinstance(existing, dict):
+        existing = dict()
+
+    added = 0
+    for name, spec in servers.items():
+        if name in existing:
+            if existing[name] == spec:
+                insync.append("%s: %s" % (path, name))
+            else:
+                conflicts.append("%s: %s differs (left as-is)" % (path, name))
+            continue
+        existing[name] = spec
+        added += 1
+
+    if added:
+        data[key] = existing
+        tmp = path + ".ai-sync.tmp"
+        with open(tmp, "w", encoding="utf-8") as fh:
+            json.dump(data, fh, indent=2)
+            fh.write("\n")
+        os.replace(tmp, path)
+        changed.append("%s (+%d server(s))" % (path, added))
+
+
+def toml_key(s):
+    # Bare TOML keys allow only A-Za-z0-9_-; anything else must be quoted
+    # (a JSON string literal is also a valid TOML basic string).
+    if re.fullmatch(r"[A-Za-z0-9_-]+", s):
+        return s
+    return json.dumps(s)
+
+
+def render_toml_table(name, spec):
+    lines = ["[mcp_servers.%s]" % toml_key(name)]
+    if "command" in spec:
+        lines.append("command = %s" % json.dumps(spec["command"]))
+    if isinstance(spec.get("args"), list):
+        lines.append("args = %s" % json.dumps(spec["args"]))
+    env = spec.get("env")
+    if isinstance(env, dict) and env:
+        lines.append("[mcp_servers.%s.env]" % toml_key(name))
+        for env_key in env:
+            lines.append("%s = %s" % (toml_key(env_key), json.dumps(env[env_key])))
+    return "\n".join(lines)
+
+
+def sync_toml(path, servers):
+    # No TOML parser ships in the stdlib before 3.11, so operate on text: a
+    # server is considered present iff its table header exists. Add-only; never
+    # edits or removes an existing table.
+    try:
+        with open(path, encoding="utf-8") as fh:
+            text = fh.read()
+    except FileNotFoundError:
+        text = ""
+    except OSError as exc:
+        sys.stderr.write("! skip %s: %s\n" % (path, exc))
+        return
+
+    additions = []
+    for name, spec in servers.items():
+        # Match the server's table header whether written bare or quoted.
+        header = re.compile(r"(?m)^\s*\[mcp_servers\.(?:%s|%s)\]"
+                            % (re.escape(name), re.escape(json.dumps(name))))
+        if header.search(text):
+            insync.append("%s: %s" % (path, name))
+        else:
+            additions.append(render_toml_table(name, spec))
+
+    if additions:
+        new = text
+        if new and not new.endswith("\n"):
+            new += "\n"
+        new += "\n" + "\n\n".join(additions) + "\n"
+        tmp = path + ".ai-sync.tmp"
+        with open(tmp, "w", encoding="utf-8") as fh:
+            fh.write(new)
+        os.replace(tmp, path)
+        changed.append("%s (+%d server(s))" % (path, len(additions)))
+
+
+def main():
+    servers = load_servers()
+    if not servers:
+        print("→ mcp.json lists no servers; nothing to sync")
+        return
+
+    # Claude Code — merge only into an existing ~/.claude.json (that file holds
+    # much more than MCP, so we never create it from scratch here).
+    if os.path.isdir(os.path.join(HOME, ".claude")) \
+            and os.path.exists(os.path.join(HOME, ".claude.json")):
+        sync_json(os.path.join(HOME, ".claude.json"), "mcpServers", servers,
+                  create_if_missing=False)
+
+    # Cursor — dedicated MCP file; safe to create.
+    if os.path.isdir(os.path.join(HOME, ".cursor")):
+        sync_json(os.path.join(HOME, ".cursor", "mcp.json"), "mcpServers", servers,
+                  create_if_missing=True)
+
+    # Gemini CLI — settings file; create if absent.
+    if os.path.isdir(os.path.join(HOME, ".gemini")):
+        sync_json(os.path.join(HOME, ".gemini", "settings.json"), "mcpServers", servers,
+                  create_if_missing=True)
+
+    # Codex CLI — TOML config.
+    if os.path.isdir(os.path.join(HOME, ".codex")):
+        sync_toml(os.path.join(HOME, ".codex", "config.toml"), servers)
+
+    for item in changed:
+        print("→ changed: %s" % item)
+    for item in conflicts:
+        print("! conflict: %s" % item)
+    if insync and not changed and not conflicts:
+        print("→ all present tools already in sync")
+
+
+if __name__ == "__main__":
+    main()
