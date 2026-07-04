@@ -18,8 +18,8 @@
         mode: '0755'
 
     - name: Deploy git-credential-github helper
-      ansible.builtin.template:
-        src: git-credential-github.j2
+      ansible.builtin.copy:
+        src: git-credential-github
         dest: "{{ home_dir }}/bin/git-credential-github"
         mode: '0700'
 
@@ -29,12 +29,24 @@
         name: credential.https://github.com.helper
         value: "{{ home_dir }}/bin/git-credential-github"
 
+    # gh is best-effort (it may be absent on Linux where it has no base-repo
+    # package). git auth works through the credential helper above regardless;
+    # the tasks below only set up the gh CLI's own auth, so they no-op cleanly
+    # when gh isn't installed.
+    - name: Detect whether the gh CLI is installed
+      ansible.builtin.shell:
+        cmd: command -v gh
+      register: gh_present
+      changed_when: false
+      failed_when: false
+
     - name: Check whether gh is already authenticated for github.com
       ansible.builtin.command:
         cmd: gh auth status --hostname github.com
       register: gh_auth_status
       changed_when: false
       failed_when: false
+      when: gh_present.rc == 0
 
     - name: Read GitHub PAT from Pass (only when gh auth missing)
       ansible.builtin.command:
@@ -42,7 +54,9 @@
       register: github_pat_value
       changed_when: false
       no_log: true
-      when: gh_auth_status.rc != 0
+      when:
+        - gh_present.rc == 0
+        - gh_auth_status.rc != 0
 
     - name: Run gh auth login --with-token (when gh auth missing)
       ansible.builtin.command:
@@ -50,12 +64,17 @@
         stdin: "{{ github_pat_value.stdout }}"
       no_log: true
       changed_when: true
-      when: gh_auth_status.rc != 0
+      when:
+        - gh_present.rc == 0
+        - gh_auth_status.rc != 0
 
     - name: Stage 03 summary
       ansible.builtin.debug:
         msg:
           - "git credential helper for https://github.com → {{ home_dir }}/bin/git-credential-github"
-          - "gh auth: {{ 'already authenticated' if gh_auth_status.rc == 0 else 'logged in fresh from Pass' }}"
+          - >-
+            gh auth: {{ 'not installed — skipped (git credential helper still active)'
+              if gh_present.rc != 0
+              else ('already authenticated' if gh_auth_status.rc == 0 else 'logged in fresh from Pass') }}
 
 ...

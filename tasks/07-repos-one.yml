@@ -11,43 +11,55 @@
 
 - name: "[{{ manifest_entry.key }}] Stat target dir"
   ansible.builtin.stat:
-    path: "{{ home_dir }}/workspace/{{ manifest_entry.key }}"
+    path: "{{ home_dir }}/{{ workspace_dir }}/{{ manifest_entry.key }}"
   register: target_dir
 
 - name: "[{{ manifest_entry.key }}] Stat target .git"
   ansible.builtin.stat:
-    path: "{{ home_dir }}/workspace/{{ manifest_entry.key }}/.git"
+    path: "{{ home_dir }}/{{ workspace_dir }}/{{ manifest_entry.key }}/.git"
   register: target_git
 
 - name: "[{{ manifest_entry.key }}] Get current origin (when .git exists)"
   ansible.builtin.command:
-    cmd: git -C "{{ home_dir }}/workspace/{{ manifest_entry.key }}" remote get-url origin
+    cmd: git -C "{{ home_dir }}/{{ workspace_dir }}/{{ manifest_entry.key }}" remote get-url origin
   register: target_origin
   changed_when: false
   failed_when: false
   when: target_git.stat.exists
 
-# Normalize both URLs to "<owner>/<repo>" by stripping protocol prefix
-# and trailing .git, so SSH and HTTPS forms compare equal.
+# Normalize both URLs to host/owner/repo (any transport, any host — same
+# transform as stage 06), so SSH and HTTPS forms compare equal. Trailing
+# slashes are stripped before the .git suffix.
+- name: "[{{ manifest_entry.key }}] Normalize manifest URL and existing origin"
+  ansible.builtin.set_fact:
+    repo_norm: >-
+      {{ repo_norm | default({}) | combine({
+           item.key: (item.value
+             | regex_replace('^\w+://', '')
+             | regex_replace('^[^@/]+@', '')
+             | regex_replace('^([^/:]+):', '\1/')
+             | regex_replace('/+$', '')
+             | regex_replace('\.git$', '')) }) }}
+  loop:
+    - { key: manifest, value: "{{ manifest_entry.value.url }}" }
+    - { key: origin,   value: "{{ target_origin.stdout | default('') }}" }
+  loop_control:
+    label: "{{ item.key }}"
+  when: target_git.stat.exists
+
 - name: "[{{ manifest_entry.key }}] Compare normalized remotes"
   ansible.builtin.set_fact:
     remote_ok: >-
       {{
         target_origin.rc | default(1) == 0
-        and (target_origin.stdout
-             | regex_replace('^(git@github\.com:|https://github\.com/)', '')
-             | regex_replace('\.git$', ''))
-            ==
-            (manifest_entry.value.url
-             | regex_replace('^(git@github\.com:|https://github\.com/)', '')
-             | regex_replace('\.git$', ''))
+        and repo_norm.manifest == repo_norm.origin
       }}
   when: target_git.stat.exists
 
 - name: "[{{ manifest_entry.key }}] Warn — existing repo has a different remote"
   ansible.builtin.debug:
     msg: |
-      [{{ manifest_entry.key }}] {{ home_dir }}/workspace/{{ manifest_entry.key }}/.git already exists
+      [{{ manifest_entry.key }}] {{ home_dir }}/{{ workspace_dir }}/{{ manifest_entry.key }}/.git already exists
       but its origin differs from the manifest:
         existing: {{ target_origin.stdout | default('(none)') }}
         expected: {{ manifest_entry.value.url }}
@@ -59,7 +71,7 @@
 - name: "[{{ manifest_entry.key }}] Warn — directory exists but is not a git repo"
   ansible.builtin.debug:
     msg: |
-      [{{ manifest_entry.key }}] {{ home_dir }}/workspace/{{ manifest_entry.key }}/ exists
+      [{{ manifest_entry.key }}] {{ home_dir }}/{{ workspace_dir }}/{{ manifest_entry.key }}/ exists
       but is not a git working copy. Skipping (continuing).
       Resolve manually: remove the directory, or convert it to a git repo.
   when:
@@ -69,7 +81,7 @@
 - name: "[{{ manifest_entry.key }}] Clone (target absent)"
   ansible.builtin.git:
     repo: "{{ manifest_entry.value.url }}"
-    dest: "{{ home_dir }}/workspace/{{ manifest_entry.key }}"
+    dest: "{{ home_dir }}/{{ workspace_dir }}/{{ manifest_entry.key }}"
     version: "{{ manifest_entry.value.version | default(omit) }}"
     update: false
     clone: true
