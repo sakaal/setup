@@ -2,26 +2,32 @@
 # 08-shell-env.yml — machine-local shell environment baseline.
 #
 # Guarantees ~/.local/bin is on PATH.  That directory is the conventional
-# drop point for user-local binaries — pipx, `pip --user`, and many
-# `curl | bash` installers (the Claude Code CLI among them) place
-# executables there but do NOT put it on PATH.  Without this, those tools
-# install successfully yet are "command not found" in a fresh shell.
+# drop point for user-local binaries — pipx (hence Ansible), pass-cli on
+# Linux, `pip --user`, and many `curl | bash` installers (the Claude Code CLI
+# among them) place executables there but do NOT put it on PATH.  Without
+# this, those tools install successfully yet are "command not found" in a
+# fresh shell.
 #
-# Idempotent: blockinfile manages a single marker-delimited region and
-# rewrites it in place, so re-running setup never duplicates lines.  The
-# emitted snippet also guards the export with a case match, so PATH does
-# not accumulate duplicate entries across nested/login shells either.
+# Written to both zsh (macOS default) and bash (Linux default) startup files
+# so it takes effect whichever shell the operator lands in. Idempotent:
+# blockinfile manages a single marker-delimited region and rewrites it in
+# place, so re-running setup never duplicates lines.  The emitted snippet also
+# guards the export with a case match, so PATH does not accumulate duplicate
+# entries across nested/login shells either.
 
-- name: Ensure ~/.local/bin is on PATH (login shells)
+- name: Ensure ~/.local/bin is on PATH (zsh and bash startup files)
   ansible.builtin.blockinfile:
-    path: "{{ home_dir }}/.zprofile"
+    path: "{{ home_dir }}/{{ item }}"
     create: true
     mode: "0644"
     marker: "# {mark} ANSIBLE MANAGED — user-local bin on PATH"
     block: |
-      # Ensure user-local binaries (Claude Code CLI, pipx, pip --user, …) are on PATH
+      # Ensure user-local binaries (Claude Code CLI, pipx, pass-cli, pip --user, …) are on PATH
       case ":$PATH:" in
         *":$HOME/.local/bin:"*) ;;
         *) export PATH="$HOME/.local/bin:$PATH" ;;
       esac
+  loop:
+    - .zprofile
+    - .bashrc
 ...
