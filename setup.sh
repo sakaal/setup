@@ -4,7 +4,7 @@
 #
 # Run on a fresh Mac or Linux to install developer tools, deploy SSH
 # keys and credentials from Proton Pass, lay down the workspace
-# manifest, and populate ~/workspace/ with project repos.
+# manifest, and populate the workspace directory with project repos.
 #
 # Prerequisite: Proton Pass desktop app installed and signed in.
 #
@@ -17,14 +17,20 @@
 #        /bin/bash -c "$(curl -fsSL https://raw.githubusercontent.com/sakaal/setup/master/setup.sh)"
 #      The script runs from stdin (never written to disk), installs
 #      Command Line Tools (which provide git) on a fresh Mac, then
-#      `git clone`s sakaal/setup into ~/workspace/setup so the canonical
-#      install is always a git working copy. SETUP_REF=<tag> selects
-#      the ref (default: master).
+#      clones the repo to $SETUP_DIR (default ~/setup) — so the install
+#      is always a git working copy — and re-execs from the clone.
+#      SETUP_REF=<tag> selects the ref (default: master).
 #
 #   2. From a local git working copy (e.g. a dev clone):
-#        cd <wherever> && ./setup.sh
-#      Auto-relocates to ~/workspace/setup if not already there,
-#      preserving the .git directory and any uncommitted changes.
+#        ./setup.sh
+#      Runs in place, wherever the clone lives.
+#
+# Optional positional argument: the workspace manifest repo; overrides the
+# default. It lands at ~/<repo-name>/ (basename minus .git, like `git clone`).
+# Any transport git understands works (SSH or HTTPS); we assume the caller's
+# git/SSH is already set up to reach it. Through the curl one-liner, pass it
+# after a $0 placeholder:
+#   /bin/bash -c "$(curl -fsSL …/setup.sh)" setup https://github.com/you/workspace.git
 
 set -uo pipefail
 
@@ -64,17 +70,28 @@ usage() {
 setup.sh — personal workspace bootstrap.
 
 Installs developer tools, deploys SSH keys and credentials from Proton
-Pass, clones the workspace manifest, and populates ~/workspace/ with
-project repos.
+Pass, clones the workspace manifest, and populates the workspace
+directory (~/<repo-name>/) with project repos.
 
 Prerequisite: Proton Pass desktop app installed and signed in.
 
+Usage:
+  setup.sh [FLAGS] [WORKSPACE_REPO]
+
 Invocation modes:
   /bin/bash -c "$(curl -fsSL https://raw.githubusercontent.com/sakaal/setup/master/setup.sh)"
-                     One-liner; script runs from stdin, then git-clones
-                     sakaal/setup into ~/workspace/setup
-  ./setup.sh         From a local git working copy — auto-relocates to
-                     ~/workspace/setup if not already there
+                     One-liner; script runs from stdin, then clones the
+                     repo to $SETUP_DIR (default ~/setup)
+  ./setup.sh         From a local git working copy — runs in place
+
+Arguments:
+  WORKSPACE_REPO   Optional. Remote of the workspace manifest repo; lands at
+                   ~/<repo-name>/ (basename minus .git, like git clone). Any
+                   transport git understands (SSH or HTTPS); assumes your
+                   git/SSH is already configured to reach it.
+                   Default: git@github.com:sakaal/workspace.git
+                   To pass it through the curl one-liner, add a $0 placeholder:
+                     /bin/bash -c "$(curl -fsSL …/setup.sh)" setup <WORKSPACE_REPO>
 
 Flags:
   --upgrade   Upgrade installed tools to their latest versions
@@ -82,6 +99,8 @@ Flags:
   --help      Show this help
 
 Environment variables:
+  SETUP_DIR   Where the one-liner installs its clone (default: ~/setup).
+              Ignored when running from an existing working copy.
   SETUP_REF   Git ref to clone when self-bootstrapping (default: master)
 EOF
 }
@@ -132,7 +151,7 @@ ensure_build_tools() {
       command -v git >/dev/null 2>&1 && return 0
       info "Installing git via distro package manager (will prompt for sudo)..."
       case "$(detect_linux_distro_family)" in
-        debian) sudo apt-get update -qq && sudo apt-get install -y git ;;
+        debian) sudo apt-get update -qq && sudo apt-get install -y git && APT_UPDATED=1 ;;
         rhel)   sudo dnf install -y git ;;
         arch)   sudo pacman -S --noconfirm git ;;
         *)      fail "Linux distro not recognized. Install git manually and re-run." ;;
@@ -145,85 +164,92 @@ ensure_build_tools() {
   esac
 }
 
-# ── Locate-and-relocate ───────────────────────────────────────────
+# ── Locate ────────────────────────────────────────────────────────
 #
-# Three cases (all converge on $CANONICAL as a git working copy):
+# Two cases:
 #
-#   (1) Already at $CANONICAL — cd and continue.
-#   (2) Local git working copy elsewhere — cp -R + mv (preserves .git
-#       and any uncommitted changes), exec from canonical.
-#   (3) Standalone (curl-piped, or local non-git copy, or non-existent
-#       canonical) — install CLT for git, `git clone` sakaal/setup into
-#       canonical, exec from there.
+#   (1) Running from a git working copy of setup (a dev clone or a prior
+#       install, anywhere) — run in place.
+#   (2) Standalone (curl-piped, or a non-git copy) — ensure a working copy
+#       at $SETUP_DIR (default ~/setup) and exec from it. An existing
+#       $SETUP_DIR is used only if it actually is a setup working copy;
+#       anything else halts — set SETUP_DIR to install elsewhere.
 #
 # This script may be running from stdin (no script file on disk) when
-# curl-piped, which is exactly why we git-clone INTO the empty canonical
-# directory rather than first writing this file there.
+# curl-piped, which is exactly why we git-clone INTO $SETUP_DIR rather
+# than first writing this file there.
 
-CANONICAL="$HOME/workspace/setup"
+SETUP_DIR="${SETUP_DIR:-$HOME/setup}"
 SCRIPT_DIR="$(cd "$(dirname "$0")" 2>/dev/null && pwd || true)"
 
-IS_LOCAL_GIT=false
-if [[ -n "$SCRIPT_DIR" \
-      && -f "$SCRIPT_DIR/setup.yaml" \
-      && -f "$SCRIPT_DIR/hosts.yaml" \
-      && -d "$SCRIPT_DIR/.git" ]]; then
-  IS_LOCAL_GIT=true
-fi
+# is_setup_clone DIR — true if DIR is a git working copy of this repo.
+is_setup_clone() {
+  [[ -n "$1" && -f "$1/setup.yml" && -f "$1/hosts.yml" && -d "$1/.git" ]]
+}
 
-if [[ "$IS_LOCAL_GIT" == "true" && "$SCRIPT_DIR" == "$CANONICAL" ]]; then
-  # Case 1: already at canonical.
-  cd "$CANONICAL"
+if is_setup_clone "$SCRIPT_DIR"; then
+  # Case 1: run in place.
+  cd "$SCRIPT_DIR"
 
-elif [[ "$IS_LOCAL_GIT" == "true" ]]; then
-  # Case 2: local git working copy at a non-canonical location.
-  if [[ -e "$CANONICAL" ]]; then
-    fail "Setup is canonically at $CANONICAL, but you ran $SCRIPT_DIR/setup.sh.
-    Either run $CANONICAL/setup.sh directly, or remove $CANONICAL first to relocate this clone."
+elif [[ -e "$SETUP_DIR" ]]; then
+  # Case 2, destination occupied: use it only if it is a setup clone.
+  if ! is_setup_clone "$SETUP_DIR"; then
+    fail "$SETUP_DIR exists but is not a setup working copy. Refusing to touch it.
+    Set SETUP_DIR=<path> to install elsewhere, or move the existing directory."
   fi
-  info "Relocating local git working copy to $CANONICAL (preserves uncommitted changes)"
-  mkdir -p "$HOME/workspace"
-  TMP="$(mktemp -d)"
-  cp -R "$SCRIPT_DIR/." "$TMP/"
-  mv "$TMP" "$CANONICAL"
-  info "Re-executing from $CANONICAL/setup.sh"
-  exec bash "$CANONICAL/setup.sh" "$@"
+  maybe_ff_update "$SETUP_DIR" master
+  info "Re-executing from $SETUP_DIR/setup.sh"
+  exec bash "$SETUP_DIR/setup.sh" "$@"
 
 else
-  # Case 3: standalone (curl-piped or non-git local copy). Self-bootstrap
-  # by `git clone`-ing sakaal/setup into the canonical location.
-  if [[ -e "$CANONICAL" ]]; then
-    info "Canonical $CANONICAL already exists"
-    maybe_ff_update "$CANONICAL" master
-    info "Re-executing from $CANONICAL/setup.sh"
-    exec bash "$CANONICAL/setup.sh" "$@"
-  fi
-
+  # Case 2, destination free: self-bootstrap by cloning into $SETUP_DIR.
   REF="${SETUP_REF:-master}"
   ensure_build_tools
   command -v git >/dev/null 2>&1 || fail "git not available; cannot self-bootstrap"
 
-  info "Cloning sakaal/setup into $CANONICAL (ref: $REF)..."
-  mkdir -p "$HOME/workspace"
-  git clone --branch "$REF" https://github.com/sakaal/setup.git "$CANONICAL"
-  info "Re-executing from $CANONICAL/setup.sh"
-  exec bash "$CANONICAL/setup.sh" "$@"
+  info "Cloning setup into $SETUP_DIR (ref: $REF)..."
+  mkdir -p "$(dirname "$SETUP_DIR")"
+  git clone --branch "$REF" https://github.com/sakaal/setup.git "$SETUP_DIR" \
+    || fail "git clone of the setup repo into $SETUP_DIR failed"
+  info "Re-executing from $SETUP_DIR/setup.sh"
+  exec bash "$SETUP_DIR/setup.sh" "$@"
 fi
 
-# ── Flag parsing (we are at $CANONICAL by this point) ─────────────
+# ── Flag parsing (running from the working copy by this point) ────
 
 UPGRADE=false
 DRY_RUN=false
+# Workspace manifest repo. The optional positional argument overrides
+# the default. Any transport git understands works
+# (git@host:owner/repo, https://…, ssh://…) — we assume the caller's git/SSH
+# is already configured to reach it.
+WORKSPACE_REPO="git@github.com:sakaal/workspace.git"
+workspace_repo_set=false
 
 while [[ $# -gt 0 ]]; do
   case "$1" in
     --upgrade) UPGRADE=true ;;
     --dry-run) DRY_RUN=true ;;
     --help|-h) usage; exit 0 ;;   # already handled above; defensive
-    *)
-      err "Unknown argument: $1"
+    -*)
+      err "Unknown option: $1"
       err "Run with --help for usage."
       exit 1
+      ;;
+    *)
+      if $workspace_repo_set; then
+        err "Unexpected extra argument: $1"
+        err "Only one positional argument (the workspace repo) is accepted."
+        err "Run with --help for usage."
+        exit 1
+      fi
+      if [[ -z "$1" ]]; then
+        err "The workspace repo argument must not be empty."
+        err "Run with --help for usage."
+        exit 1
+      fi
+      WORKSPACE_REPO="$1"
+      workspace_repo_set=true
       ;;
   esac
   shift
@@ -266,44 +292,25 @@ case "$PLATFORM" in
     ;;
 esac
 
-# ── Package manager (Homebrew on macOS) ───────────────────────────
+# ── Package managers and tool installation ────────────────────────
+#
+# Tooling is provisioned per platform, but two things are unified across
+# both: pipx (installed via the platform package manager) and Ansible
+# (installed via pipx, so it always bundles the community.general collection
+# the playbook needs). On macOS the platform package manager is Homebrew; on
+# Linux it is the distro-native manager (dnf on Fedora-family, apt on
+# Debian-family, pacman on Arch). Homebrew is not used on Linux.
 
 ensure_brew_on_path() {
   if [[ -x /opt/homebrew/bin/brew ]]; then
     eval "$(/opt/homebrew/bin/brew shellenv)"
-  elif [[ -x /home/linuxbrew/.linuxbrew/bin/brew ]]; then
-    eval "$(/home/linuxbrew/.linuxbrew/bin/brew shellenv)"
   fi
 }
 
-case "$PLATFORM" in
-  mac)
-    if command -v brew >/dev/null 2>&1; then
-      ok "Homebrew present"
-    else
-      info "Installing Homebrew..."
-      run /bin/bash -c "$(curl -fsSL https://raw.githubusercontent.com/Homebrew/install/HEAD/install.sh)"
-      ensure_brew_on_path
-      command -v brew >/dev/null 2>&1 || fail "Homebrew not on PATH after install"
-      ok "Homebrew installed"
-    fi
-    ensure_brew_on_path
-    ;;
-  linux)
-    # Linux: package-manager bootstrap. Open question — Homebrew on
-    # Linux (uniform with macOS) or distro-native (apt/dnf/pacman).
-    # Not yet implemented.
-    fail "Linux package-manager bootstrap: not yet implemented (macOS-only at this time)."
-    ;;
-esac
-
-# ── Tools via Homebrew ────────────────────────────────────────────
-#
-# install_brew_tool BINARY [FORMULA]
+# install_brew_tool BINARY [FORMULA]  (macOS only)
 #   BINARY  — name of the executable on PATH
 #   FORMULA — Homebrew formula (defaults to BINARY); use tap/formula form
 #             for tapped formulas (e.g. protonpass/tap/pass-cli)
-
 install_brew_tool() {
   local bin="$1"
   local formula="${2:-$1}"
@@ -323,10 +330,195 @@ install_brew_tool() {
   fi
 }
 
-install_brew_tool git
-install_brew_tool ansible
-install_brew_tool gh
-install_brew_tool pass-cli protonpass/tap/pass-cli
+# linux_pkg_install PKG...  — install packages via the distro-native manager.
+# The apt metadata refresh runs once per process (APT_UPDATED guard), not on
+# every call.
+linux_pkg_install() {
+  case "$LINUX_FAMILY" in
+    debian)
+      if [[ -z "${APT_UPDATED:-}" ]]; then
+        run sudo apt-get update -qq || return 1
+        APT_UPDATED=1
+      fi
+      run sudo apt-get install -y "$@" ;;
+    rhel)   run sudo dnf install -y "$@" ;;
+    arch)   run sudo pacman -S --needed --noconfirm "$@" ;;
+    *)      warn "Unknown Linux family; install manually: $*"; return 1 ;;
+  esac
+}
+
+# ensure_pipx — install pipx via the platform package manager. Falls back to a
+# user-level pip install on Linux distros that don't package it (pipx lives
+# only in EPEL on some RHEL-family releases).
+ensure_pipx() {
+  if command -v pipx >/dev/null 2>&1; then
+    ok "pipx present"
+    return 0
+  fi
+  info "Installing pipx..."
+  case "$PLATFORM" in
+    mac) install_brew_tool pipx ;;
+    linux)
+      case "$LINUX_FAMILY" in
+        arch) linux_pkg_install python-pipx ;;
+        *)    linux_pkg_install pipx ;;
+      esac
+      if ! command -v pipx >/dev/null 2>&1; then
+        warn "pipx not available from the distro; installing at user level via pip"
+        run python3 -m pip install --user pipx \
+          || run python3 -m pip install --user --break-system-packages pipx \
+          || fail "could not install pipx"
+      fi
+      ;;
+  esac
+  hash -r 2>/dev/null || true
+  command -v pipx >/dev/null 2>&1 || $DRY_RUN || fail "pipx not on PATH after install"
+  run pipx ensurepath >/dev/null 2>&1 || true
+  ok "pipx installed"
+}
+
+# ensure_ansible — install Ansible via pipx on both platforms. --include-deps
+# is required: ansible's console scripts (ansible-playbook, ansible-vault, …)
+# are provided by its ansible-core dependency, so without it pipx exposes no
+# commands. The top-level `ansible` package bundles community.general
+# (git_config, ini_file), which the playbook uses.
+ensure_ansible() {
+  if command -v ansible-playbook >/dev/null 2>&1; then
+    ok "ansible present"
+    if $UPGRADE; then
+      info "Upgrading ansible..."
+      run pipx upgrade ansible || warn "ansible: pipx upgrade failed (continuing)"
+    fi
+    return 0
+  fi
+  info "Installing ansible via pipx..."
+  if run pipx install --include-deps ansible; then
+    hash -r 2>/dev/null || true
+    ok "ansible installed"
+  else
+    fail "ansible install via pipx failed"
+  fi
+}
+
+# ensure_gh — GitHub CLI. brew on macOS; distro package (via the official
+# GitHub repo on Fedora-family) on Linux. Best-effort: gh only powers the
+# convenience `gh auth login` in stage 03; git auth itself goes through the
+# credential helper, so a gh failure must not abort the bootstrap.
+ensure_gh() {
+  if command -v gh >/dev/null 2>&1; then
+    ok "gh present"
+    if [[ "$PLATFORM" == mac ]] && $UPGRADE; then
+      info "Upgrading gh..."
+      run brew upgrade gh || warn "gh upgrade failed (continuing)"
+    fi
+    return 0
+  fi
+  info "Installing gh (GitHub CLI)..."
+  case "$PLATFORM" in
+    mac) install_brew_tool gh ;;
+    linux)
+      case "$LINUX_FAMILY" in
+        rhel)
+          run sudo dnf install -y 'dnf-command(config-manager)' || true
+          run sudo dnf config-manager --add-repo https://cli.github.com/packages/rpm/gh-cli.repo 2>/dev/null \
+            || run sudo dnf config-manager addrepo --overwrite --from-repofile=https://cli.github.com/packages/rpm/gh-cli.repo 2>/dev/null \
+            || warn "could not add GitHub CLI repo (continuing)"
+          run sudo dnf install -y gh || warn "gh install failed (continuing)"
+          ;;
+        debian)
+          run sudo apt-get install -y gh \
+            || warn "gh not in base repos; see https://github.com/cli/cli/blob/trunk/docs/install_linux.md (continuing)"
+          ;;
+        arch)
+          linux_pkg_install github-cli || warn "gh install failed (continuing)"
+          ;;
+      esac
+      ;;
+  esac
+  if command -v gh >/dev/null 2>&1; then
+    ok "gh installed"
+  else
+    warn "gh unavailable — stage 03 will skip gh auth (git credential helper still works)"
+  fi
+}
+
+# ensure_pass_cli — Proton Pass CLI. brew tap on macOS; Proton's official
+# installer (into ~/.local/bin) on Linux, since there is no native package.
+ensure_pass_cli() {
+  if command -v pass-cli >/dev/null 2>&1; then
+    ok "pass-cli present"
+    if $UPGRADE; then
+      case "$PLATFORM" in
+        mac)   info "Upgrading pass-cli..."; run brew upgrade pass-cli || warn "pass-cli upgrade failed (continuing)" ;;
+        linux) info "Upgrading pass-cli..."; run pass-cli update || warn "pass-cli update failed (continuing)" ;;
+      esac
+    fi
+    return 0
+  fi
+  info "Installing pass-cli..."
+  case "$PLATFORM" in
+    mac) install_brew_tool pass-cli protonpass/tap/pass-cli ;;
+    linux)
+      # Official cross-platform installer; drops the binary in ~/.local/bin
+      # (already on PATH for this run, persisted by stage 08). Needs curl+jq.
+      run bash -c 'curl -fsSL https://proton.me/download/pass-cli/install.sh | bash' \
+        || fail "pass-cli install failed"
+      ;;
+  esac
+  hash -r 2>/dev/null || true
+  command -v pass-cli >/dev/null 2>&1 || $DRY_RUN || fail "pass-cli not on PATH after install"
+  ok "pass-cli installed"
+}
+
+# ── Provision package manager + base packages ─────────────────────
+
+case "$PLATFORM" in
+  mac)
+    if command -v brew >/dev/null 2>&1; then
+      ok "Homebrew present"
+    else
+      info "Installing Homebrew..."
+      run /bin/bash -c "$(curl -fsSL https://raw.githubusercontent.com/Homebrew/install/HEAD/install.sh)"
+      ensure_brew_on_path
+      command -v brew >/dev/null 2>&1 || $DRY_RUN || fail "Homebrew not on PATH after install"
+      ok "Homebrew installed"
+    fi
+    ensure_brew_on_path
+    ;;
+  linux)
+    LINUX_FAMILY="$(detect_linux_distro_family)"
+    [[ "$LINUX_FAMILY" == unknown ]] \
+      && fail "Unrecognized Linux distro. Supported families: Fedora/RHEL (dnf), Debian (apt), Arch (pacman)."
+    ok "Linux family: $LINUX_FAMILY"
+    # Base packages the later stages shell out to: the pass-cli installer
+    # needs curl+jq; the playbook uses python3, git, and OpenSSH client tools.
+    info "Ensuring base packages..."
+    case "$LINUX_FAMILY" in
+      debian) linux_pkg_install git curl jq python3 openssh-client ;;
+      rhel)   linux_pkg_install git curl jq python3 openssh-clients ;;
+      arch)   linux_pkg_install git curl jq python  openssh ;;
+    esac || warn "base package install had issues (continuing)"
+    ;;
+esac
+
+# User-local binaries (pipx apps, pass-cli) install into ~/.local/bin. Put it
+# on PATH for the rest of THIS run so freshly-installed tools resolve; stage
+# 08 persists it for future shells.
+export PATH="$HOME/.local/bin:$PATH"
+hash -r 2>/dev/null || true
+
+# ── Install tools ─────────────────────────────────────────────────
+
+ensure_pipx
+
+case "$PLATFORM" in
+  mac)   install_brew_tool git ;;
+  linux) command -v git >/dev/null 2>&1 && ok "git present" || linux_pkg_install git ;;
+esac
+
+ensure_gh
+ensure_pass_cli
+ensure_ansible
 
 # ── Proton Pass authentication ────────────────────────────────────
 
@@ -343,11 +535,14 @@ fi
 # ── Hand off to Ansible ───────────────────────────────────────────
 
 info "Running setup playbook..."
-ANSIBLE_ARGS=(-i hosts.yaml setup.yaml)
+ok "Workspace repo: $WORKSPACE_REPO"
+ANSIBLE_ARGS=(-i hosts.yml setup.yml -e "workspace_repo=$WORKSPACE_REPO")
 if $DRY_RUN; then
   ANSIBLE_ARGS+=(--check)
 fi
-if ! ansible-playbook "${ANSIBLE_ARGS[@]}"; then
+if $DRY_RUN && ! command -v ansible-playbook >/dev/null 2>&1; then
+  info "(dry-run) Would: ansible-playbook ${ANSIBLE_ARGS[*]}"
+elif ! ansible-playbook "${ANSIBLE_ARGS[@]}"; then
   fail "ansible-playbook failed; setup.sh halted before completing"
 fi
 

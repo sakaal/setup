@@ -8,7 +8,7 @@
 #   - Present and matches (algo + base64 portion) → no-op
 #   - Present and differs → halt (per safe-idempotent stance)
 #
-# After all keys are deployed, switch ~/workspace/setup origin from
+# After all keys are deployed, switch the setup clone's origin from
 # HTTPS to SSH so daily git operations use the agent rather than PAT.
 
 - name: Ensure ~/.ssh exists with restrictive perms
@@ -73,21 +73,24 @@
 # so daily git operations use the agent. Conditional: only switch if
 # the remote is still the HTTPS form we cloned with (don't clobber
 # user customization).
+#
+# NB: playbook_dir is the running setup clone — setup.sh invokes the
+# playbook from its own working copy, wherever that lives.
 
-- name: Get current ~/workspace/setup origin URL
+- name: Get current setup clone origin URL
   ansible.builtin.command:
-    cmd: git -C "{{ home_dir }}/workspace/setup" remote get-url origin
+    cmd: git -C "{{ playbook_dir }}" remote get-url origin
   register: setup_origin
   changed_when: false
   failed_when: false
 
-- name: Switch ~/workspace/setup origin from HTTPS to SSH
+- name: Switch setup clone origin from HTTPS to SSH
   ansible.builtin.command:
-    cmd: git -C "{{ home_dir }}/workspace/setup" remote set-url origin git@github.com:sakaal/setup.git
+    cmd: git -C "{{ playbook_dir }}" remote set-url origin git@github.com:sakaal/setup.git
   when:
     - setup_ssh_titles | length > 0
     - setup_origin.rc == 0
-    - setup_origin.stdout == "https://github.com/sakaal/setup.git"
+    - setup_origin.stdout is regex('^https://github\.com/sakaal/setup(\.git)?$')
   changed_when: true
 
 ...

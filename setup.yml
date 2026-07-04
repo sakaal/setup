@@ -1,5 +1,5 @@
 ---
-# setup.yaml — main bootstrap playbook.
+# setup.yml — main bootstrap playbook.
 #
 # Invoked by setup.sh once prerequisites are installed and pass-cli is
 # authenticated. Discovers items in the Proton Pass "Setup Keys" vault
@@ -13,8 +13,29 @@
 
   vars:
     home_dir: "{{ lookup('env', 'HOME') }}"
+    # Workspace manifest repository. setup.sh passes this via -e (extra-vars,
+    # highest precedence) from its optional positional argument; the default
+    # here is what a direct `ansible-playbook` invocation gets.
+    workspace_repo: "git@github.com:sakaal/workspace.git"
+    # Directory under $HOME where the workspace repo lands: its basename
+    # minus .git, like `git clone`. Derived; not a user-facing setting.
+    workspace_dir: >-
+      {{ workspace_repo
+         | regex_replace('/+$', '')
+         | regex_replace('\.git$', '')
+         | regex_replace('^.*[/:]', '') }}
 
   tasks:
+    - name: Validate the derived workspace directory name
+      ansible.builtin.assert:
+        that:
+          - workspace_dir | length > 0
+        fail_msg: >-
+          workspace_repo "{{ workspace_repo }}" does not yield a usable
+          directory name (basename minus .git). Pass a normal repo URL,
+          e.g. …/my-projects.git.
+      tags: [always]
+
     - name: Discover Setup Keys items
       ansible.builtin.import_tasks: tasks/01-discover.yml
       tags: [discover, always]
@@ -35,7 +56,7 @@
       ansible.builtin.import_tasks: tasks/05-git-config.yml
       tags: [git-config]
 
-    - name: Deploy ~/workspace working tree
+    - name: Deploy ~/{{ workspace_dir }} working tree
       ansible.builtin.import_tasks: tasks/06-workspace.yml
       tags: [workspace]
 
@@ -46,5 +67,9 @@
     - name: Configure shell environment baseline
       ansible.builtin.import_tasks: tasks/08-shell-env.yml
       tags: [shell-env]
+
+    - name: Configure AI assistants (hub + sync)
+      ansible.builtin.import_tasks: tasks/09-ai-config.yml
+      tags: [ai]
 
 ...
