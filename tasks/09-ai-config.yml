@@ -1,0 +1,80 @@
+---
+# 09-ai-config.yml — machine-local AI-assistant configuration baseline.
+#
+# The real AI configuration content is private and lives in the workspace
+# repo — stage 06 lays it at ~/{{ workspace_dir }}:
+#
+#   ~/{{ workspace_dir }}/ai/AGENTS.md   agent-neutral instructions (single source of truth)
+#   ~/{{ workspace_dir }}/ai/mcp.json    MCP server list
+#
+# This public repo carries no instruction content — only mechanism. This stage
+# maintains ~/.config/ai/ as a stable hub of symlinks to that content, so the
+# workspace-repo layout is encoded here and nowhere else; every tool is wired
+# (09-ai-sync.yml) against the hub paths only:
+#
+#   ~/.config/ai/AGENTS.md        → ~/{{ workspace_dir }}/ai/AGENTS.md
+#   ~/.config/ai/mcp.json         → ~/{{ workspace_dir }}/ai/mcp.json
+#   ~/.config/ai/agent-map.yml    setup-managed manifest (deployed below)
+#
+# The hub links are laid even if the workspace repo doesn't carry ai/ yet — a
+# dangling symlink is harmless (tools see "no file") and self-heals the moment
+# the files land in the workspace repo via git, with no re-run of setup.
+#
+# Two parts, separately taggable:
+#   ai-config — the hub under ~/.config/ai/ (below)
+#   ai-sync   — wire present tools to the hub + generate MCP (09-ai-sync.yml)
+
+- name: Ensure ~/.config/ai exists
+  ansible.builtin.file:
+    path: "{{ home_dir }}/.config/ai"
+    state: directory
+    mode: "0755"
+  tags: [ai-config]
+
+- name: Stat hub paths (never replace a real file with a symlink)
+  ansible.builtin.stat:
+    path: "{{ home_dir }}/.config/ai/{{ item }}"
+    follow: false
+  loop: [AGENTS.md, mcp.json]
+  register: ai_hub_stats
+  tags: [ai-config]
+
+# Safe to (re)link over: nothing, an existing symlink (no content of its own),
+# or an empty regular file. Anything else holds content → halt, never clobber.
+- name: Halt — hub path is occupied by a file with content
+  ansible.builtin.fail:
+    msg: >-
+      Refusing to replace existing non-empty file(s) under ~/.config/ai with
+      symlinks: {{ ai_hub_conflicts | join(', ') }}.
+      Canonical content lives in the workspace repo (~/{{ workspace_dir }}/ai/).
+      Move the file's content there, remove the local file, and re-run.
+  vars:
+    ai_hub_conflicts: >-
+      {{ ai_hub_stats.results
+         | selectattr('stat.exists')
+         | rejectattr('stat.islnk')
+         | rejectattr('stat.size', 'equalto', 0)
+         | map(attribute='item') | list }}
+  when: ai_hub_conflicts | length > 0
+  tags: [ai-config]
+
+- name: Link hub → ~/{{ workspace_dir }}/ai (dangling OK until the repo carries ai/)
+  ansible.builtin.file:
+    src: "{{ home_dir }}/{{ workspace_dir }}/ai/{{ item }}"
+    dest: "{{ home_dir }}/.config/ai/{{ item }}"
+    state: link
+    force: true
+  loop: [AGENTS.md, mcp.json]
+  tags: [ai-config]
+
+- name: Deploy the AI agent map/manifest (setup-managed)
+  ansible.builtin.copy:
+    src: agent-map.yml
+    dest: "{{ home_dir }}/.config/ai/agent-map.yml"
+    mode: "0644"
+  tags: [ai-config]
+
+- name: Wire present tools to the hub + generate MCP
+  ansible.builtin.import_tasks: 09-ai-sync.yml
+  tags: [ai-sync]
+...
