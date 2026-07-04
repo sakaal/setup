@@ -6,7 +6,7 @@
 #
 #   pass://Setup Keys/vault_pass-<vault-id>/password
 #
-# Deployed by setup; do not edit. Edit setup's template instead.
+# Deployed by setup; do not edit. Edit setup's source instead.
 
 case "$1" in
   --vault-id) exec pass-cli item view "pass://Setup Keys/vault_pass-$2/password" ;;
