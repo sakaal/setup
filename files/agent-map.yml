@@ -5,23 +5,39 @@
 # source in the setup repo instead.
 #
 # Single manifest of where each AI assistant on this machine keeps its
-# configuration, and how setup keeps it in sync from the agent-neutral
-# sources under ~/.config/ai/.
+# configuration, and how it relates to the agent-neutral sources under
+# ~/.config/ai/.
+#
+# A note on "tool-specific" config: several classes a tool presents as its own
+# — memory, command/skill prompts, subagent definitions — are in reality
+# portable prompt and guidance content that any capable agent could use. This
+# map records their locations so they can be reused across tools and harvested
+# into the shared hub, even where no common format lets setup sync them yet.
+# Only genuinely mechanical config (instructions text, MCP servers) is synced;
+# only genuinely tool-bound config (settings) is ignored outright.
 #
 # Sync methods:
-#   link     — symlink the tool's file to the hub file. User scope,
-#              for tools that never rewrite the file in place.
-#   import   — a tiny stub that @imports the hub file, for tools that
-#              DO rewrite their own instruction file in place (e.g. Claude Code).
-#   generate — render the hub mcp.json into the
-#              tool's own format via ~/bin/ai-sync.
-#   ignore   — app-managed, or no standalone file to sync; the tool consumes
-#              the shared config only at project scope (or not at all).
+#   link     — symlink the tool's file to the hub file (user scope; tools that
+#              never rewrite the file in place).
+#   import   — a stub that @imports the hub file (tools that rewrite their own
+#              instruction file in place, e.g. Claude Code).
+#   generate — render the hub mcp.json into the tool's own format via
+#              ~/bin/ai-sync.
+#   portable — a real location holding agent-neutral content (memory, command/
+#              skill prompts, subagent definitions) the tool frames as its own
+#              but which is reusable by any capable agent. Not auto-synced — no
+#              common cross-tool format or location exists yet — so the path is
+#              mapped for manual reuse and for harvesting into the hub
+#              (AGENTS.md) or repo docs.
+#   ignore   — genuinely nothing to sync: an app-managed store or no standalone
+#              file (e.g. Cursor User Rules, per-tool settings).
 #
 # Config classes:
-#   instructions — always-loaded guidance; hub: ~/.config/ai/AGENTS.md
-#   mcp          — MCP server definitions;  hub: ~/.config/ai/mcp.json
-#   settings, commands, subagents, memory — per-tool; intentionally not synced.
+#   instructions — always-loaded guidance;  hub: ~/.config/ai/AGENTS.md  (synced)
+#   mcp          — MCP server definitions;   hub: ~/.config/ai/mcp.json   (synced)
+#   commands / skills / subagents / memory — portable prompt & guidance
+#                  content; locations mapped (portable), not auto-synced.
+#   settings     — genuinely per-tool (model, permissions, toggles); ignored.
 
 # The two shared sources every sync method below refers to. Both are symlinks
 # into the workspace repo's ai/ directory (readlink shows the target). Edit
@@ -62,10 +78,25 @@ tools:
         sync: ignore
       commands:
         path: ~/.claude/commands/
-        sync: ignore
+        sync: portable
+        description: Slash-command prompts (Markdown) — reusable content.
       subagents:
         path: ~/.claude/agents/
-        sync: ignore
+        sync: portable
+        description: Subagent definitions (prompt + tool scope) — reusable.
+      skills:
+        path: ~/.claude/skills/
+        sync: portable
+        description: Skills (SKILL.md + resources) — reusable content.
+      memory:
+        path: ~/.claude/projects/<project>/memory/
+        sync: portable
+        description: >-
+          Per-project auto-memory, keyed by project path but stored under the
+          home dir (not in the repo tree) — machine-local and Claude-only.
+          Global twin: ~/.claude/memory/. Distilled guidance accumulates here;
+          harvest into AGENTS.md or repo docs, as it neither syncs nor reaches
+          other agents.
     project:
       instructions:
         path: CLAUDE.md
@@ -76,6 +107,15 @@ tools:
         format: json
         key: mcpServers
         sync: generate
+      commands:
+        path: .claude/commands/
+        sync: portable
+      subagents:
+        path: .claude/agents/
+        sync: portable
+      skills:
+        path: .claude/skills/
+        sync: portable
 
   openai-codex:
     name: OpenAI Codex CLI
@@ -94,6 +134,10 @@ tools:
       settings:
         path: ~/.codex/config.toml
         sync: ignore
+      commands:
+        path: ~/.codex/prompts/
+        sync: portable
+        description: Custom prompts (Markdown) — reusable content.
     project:
       instructions:
         path: AGENTS.md
@@ -117,10 +161,17 @@ tools:
       settings:
         path: ~/.gemini/settings.json
         sync: ignore
+      commands:
+        path: ~/.gemini/commands/
+        sync: portable
+        description: Custom commands (TOML) — reusable prompt content.
     project:
       instructions:
         path: GEMINI.md
         sync: link
+      commands:
+        path: .gemini/commands/
+        sync: portable
 
   cursor:
     name: Cursor
@@ -146,6 +197,10 @@ tools:
         format: json
         key: mcpServers
         sync: generate
+      commands:
+        path: .cursor/commands/
+        sync: portable
+        description: Command prompts (Markdown) — reusable content.
 
   github-copilot:
     name: GitHub Copilot
@@ -167,4 +222,12 @@ tools:
         path: .github/copilot-instructions.md
         sync: import
         description: Point the repo's Copilot instructions at its AGENTS.md.
+      commands:
+        path: .github/prompts/
+        sync: portable
+        description: Prompt files (*.prompt.md) — reusable content.
+      subagents:
+        path: .github/chatmodes/
+        sync: portable
+        description: Custom chat modes (*.chatmode.md) — reusable content.
 ...
