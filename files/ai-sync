@@ -175,7 +175,9 @@ def main():
     # are data the engines never read.
     acted = False
     for entry in manifest.get("entries", {}).get("distribute", []):
-        if entry.get("scope") != "user":
+        # Match scope by its base (user vs repo); a :path/:pattern suffix
+        # refines but does not change which engine owns the entry.
+        if entry.get("scope", "").split(":", 1)[0] != "user":
             continue
         if entry.get("sync") not in ("generate", "wrap"):
             continue
