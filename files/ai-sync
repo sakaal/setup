@@ -171,8 +171,10 @@ def main():
         d = detect.get(tool)
         return bool(d) and os.path.isdir(expand(d))
 
+    # Only the distribute lane is machine-applied; harvest and tool-specific
+    # are data the engines never read.
     acted = False
-    for entry in manifest.get("entries", []):
+    for entry in manifest.get("entries", {}).get("distribute", []):
         if entry.get("scope") != "user":
             continue
         if entry.get("sync") not in ("generate", "wrap"):
