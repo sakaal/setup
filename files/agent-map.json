@@ -1,0 +1,71 @@
+{
+  "_note": "Managed by setup (tasks/09-ai-config.yml). Authoritative, data-driven sync manifest — read natively by Ansible (include_vars) and by ~/bin/ai-sync (json). Adding a tool or class is a data edit here; the engines never enumerate tools. Edit the source in the setup repo, not the deployed copy.",
+
+  "methods": {
+    "link": "symlink target -> hub source (tool reads the source's native format from that path)",
+    "import": "write a one-line stub at target that @imports the hub source (tools that rewrite their own instruction file, e.g. Claude Code)",
+    "generate": "ai-sync renders the hub source into the target's own format; dispatch on 'format'",
+    "wrap": "ai-sync wraps a shared prompt body into the target's packaging; dispatch on 'format'",
+    "ignore": "nothing to sync (app-managed store, or no standalone file)"
+  },
+
+  "note_on_classes": "instructions and mcp are mechanical and synced. commands, skills, agents are portable prompt/guidance content the tool frames as its own but which any capable agent can use — plain text/markdown, so shared by symlink where the tool reads that format, or a light wrap where it does not. memory is portable but flows the other way (accumulated by the tool) — harvested by hand, never pushed. settings is genuinely per-tool and ignored.",
+
+  "hub": {
+    "dir": "~/.config/ai",
+    "workspace_subdir": "ai",
+    "sources": ["AGENTS.md", "mcp.json", "commands", "skills", "agents"]
+  },
+
+  "detect": {
+    "claude-code": "~/.claude",
+    "openai-codex": "~/.codex",
+    "gemini-cli": "~/.gemini",
+    "cursor": "~/.cursor"
+  },
+
+  "entries": [
+    {"tool": "claude-code", "scope": "user", "class": "instructions", "path": "~/.claude/CLAUDE.md", "sync": "import", "source": "AGENTS.md", "note": "Claude rewrites this file when saving memory, so a stub, not a symlink."},
+    {"tool": "claude-code", "scope": "user", "class": "mcp", "path": "~/.claude.json", "sync": "generate", "source": "mcp.json", "format": "mcp-json", "key": "mcpServers", "create": false, "note": "Holds far more than MCP; merge only, never create from scratch."},
+    {"tool": "claude-code", "scope": "user", "class": "commands", "path": "~/.claude/commands", "sync": "link", "source": "commands"},
+    {"tool": "claude-code", "scope": "user", "class": "skills", "path": "~/.claude/skills", "sync": "link", "source": "skills"},
+    {"tool": "claude-code", "scope": "user", "class": "agents", "path": "~/.claude/agents", "sync": "link", "source": "agents", "note": "Claude calls these 'subagents' — that names the spawn relationship, not the artifact."},
+    {"tool": "claude-code", "scope": "user", "class": "memory", "path": "~/.claude/projects/<project>/memory", "sync": "ignore", "note": "Per-project auto-memory, stored under home not the repo; portable content but tool-accumulated — harvest into AGENTS.md by hand, do not push. Global twin: ~/.claude/memory/."},
+    {"tool": "claude-code", "scope": "user", "class": "settings", "path": "~/.claude/settings.json", "sync": "ignore"},
+
+    {"tool": "openai-codex", "scope": "user", "class": "instructions", "path": "~/.codex/AGENTS.md", "sync": "link", "source": "AGENTS.md"},
+    {"tool": "openai-codex", "scope": "user", "class": "mcp", "path": "~/.codex/config.toml", "sync": "generate", "source": "mcp.json", "format": "mcp-toml", "table": "mcp_servers"},
+    {"tool": "openai-codex", "scope": "user", "class": "commands", "path": "~/.codex/prompts", "sync": "link", "source": "commands", "note": "Custom prompts (Markdown)."},
+    {"tool": "openai-codex", "scope": "user", "class": "settings", "path": "~/.codex/config.toml", "sync": "ignore"},
+
+    {"tool": "gemini-cli", "scope": "user", "class": "instructions", "path": "~/.gemini/GEMINI.md", "sync": "link", "source": "AGENTS.md", "note": "Or set contextFileName to AGENTS.md in settings.json."},
+    {"tool": "gemini-cli", "scope": "user", "class": "mcp", "path": "~/.gemini/settings.json", "sync": "generate", "source": "mcp.json", "format": "mcp-json", "key": "mcpServers"},
+    {"tool": "gemini-cli", "scope": "user", "class": "commands", "path": "~/.gemini/commands", "sync": "ignore", "note": "Gemini commands are TOML, not Markdown — needs a 'wrap' emitter (format gemini-command) before syncing."},
+    {"tool": "gemini-cli", "scope": "user", "class": "settings", "path": "~/.gemini/settings.json", "sync": "ignore"},
+
+    {"tool": "cursor", "scope": "user", "class": "instructions", "path": null, "sync": "ignore", "note": "User Rules are app-managed; shared instructions reach Cursor at project scope via AGENTS.md."},
+    {"tool": "cursor", "scope": "user", "class": "mcp", "path": "~/.cursor/mcp.json", "sync": "generate", "source": "mcp.json", "format": "mcp-json", "key": "mcpServers"},
+
+    {"tool": "github-copilot", "scope": "user", "class": "instructions", "path": null, "sync": "ignore", "note": "IDE user settings; no standalone file."},
+    {"tool": "github-copilot", "scope": "user", "class": "mcp", "path": null, "sync": "ignore", "note": "Editor-managed (e.g. VS Code mcp.json); path varies by editor/OS."},
+
+    {"tool": "claude-code", "scope": "project", "class": "instructions", "path": "CLAUDE.md", "sync": "import", "source": "AGENTS.md"},
+    {"tool": "claude-code", "scope": "project", "class": "mcp", "path": ".mcp.json", "sync": "generate", "source": "mcp.json", "format": "mcp-json", "key": "mcpServers"},
+    {"tool": "claude-code", "scope": "project", "class": "commands", "path": ".claude/commands", "sync": "link", "source": "commands"},
+    {"tool": "claude-code", "scope": "project", "class": "skills", "path": ".claude/skills", "sync": "link", "source": "skills"},
+    {"tool": "claude-code", "scope": "project", "class": "agents", "path": ".claude/agents", "sync": "link", "source": "agents"},
+
+    {"tool": "openai-codex", "scope": "project", "class": "instructions", "path": "AGENTS.md", "sync": "link", "source": "AGENTS.md", "note": "Read natively; the standard filename."},
+
+    {"tool": "gemini-cli", "scope": "project", "class": "instructions", "path": "GEMINI.md", "sync": "link", "source": "AGENTS.md"},
+    {"tool": "gemini-cli", "scope": "project", "class": "commands", "path": ".gemini/commands", "sync": "ignore", "note": "TOML — needs a wrap emitter."},
+
+    {"tool": "cursor", "scope": "project", "class": "instructions", "path": "AGENTS.md", "sync": "link", "source": "AGENTS.md", "note": "Cursor reads AGENTS.md natively."},
+    {"tool": "cursor", "scope": "project", "class": "mcp", "path": ".cursor/mcp.json", "sync": "generate", "source": "mcp.json", "format": "mcp-json", "key": "mcpServers"},
+    {"tool": "cursor", "scope": "project", "class": "commands", "path": ".cursor/commands", "sync": "link", "source": "commands"},
+
+    {"tool": "github-copilot", "scope": "project", "class": "instructions", "path": ".github/copilot-instructions.md", "sync": "import", "source": "AGENTS.md"},
+    {"tool": "github-copilot", "scope": "project", "class": "commands", "path": ".github/prompts", "sync": "link", "source": "commands", "note": "Prompt files (*.prompt.md)."},
+    {"tool": "github-copilot", "scope": "project", "class": "agents", "path": ".github/chatmodes", "sync": "link", "source": "agents", "note": "Custom chat modes (*.chatmode.md) — Copilot's agent equivalent."}
+  ]
+}

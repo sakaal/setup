@@ -1,0 +1,107 @@
+---
+# 09-ai-wire-one.yml — wire ONE user-scope link/import entry to its hub source,
+# non-destructively. Loop body from 09-ai-sync.yml. `entry` carries tool, class,
+# path, sync (link|import), source.
+#
+# Acts only when the tool is present (its detect dir exists) AND the hub source
+# resolves (the workspace repo provides it — so no dangling tool links). On the
+# target:
+#   absent, or an empty file          → create link / write stub
+#   already the correct link / stub   → no-op
+#   anything else (content, real dir) → record conflict; never touch it
+
+- name: "[{{ entry.tool }}:{{ entry.class }}] Resolve paths"
+  ansible.builtin.set_fact:
+    wire_target: "{{ entry.path | regex_replace('^~', home_dir) }}"
+    wire_detect: "{{ ai_map.detect[entry.tool] | default('') | regex_replace('^~', home_dir) }}"
+    wire_source: "{{ home_dir }}/.config/ai/{{ entry.source }}"
+    wire_stub: "@{{ home_dir }}/.config/ai/{{ entry.source }}"
+
+- name: "[{{ entry.tool }}:{{ entry.class }}] Stat tool detect dir"
+  ansible.builtin.stat:
+    path: "{{ wire_detect }}"
+  register: wire_detect_stat
+
+- name: "[{{ entry.tool }}:{{ entry.class }}] Stat hub source (resolve symlink)"
+  ansible.builtin.stat:
+    path: "{{ wire_source }}"
+  register: wire_source_stat
+
+- name: "[{{ entry.tool }}:{{ entry.class }}] Wire (present tool, existing source)"
+  when:
+    - wire_detect != ''
+    - wire_detect_stat.stat.exists
+    - wire_source_stat.stat.exists
+  block:
+    - name: "[{{ entry.tool }}:{{ entry.class }}] Stat target (no follow)"
+      ansible.builtin.stat:
+        path: "{{ wire_target }}"
+        follow: false
+      register: wire_tgt
+
+    - name: "[{{ entry.tool }}:{{ entry.class }}] Read target if a plain file"
+      ansible.builtin.slurp:
+        src: "{{ wire_target }}"
+      register: wire_slurp
+      when:
+        - wire_tgt.stat.exists
+        - not (wire_tgt.stat.islnk | default(false))
+        - not (wire_tgt.stat.isdir | default(false))
+
+    - name: "[{{ entry.tool }}:{{ entry.class }}] Compute current body"
+      ansible.builtin.set_fact:
+        wire_body: >-
+          {{ (wire_slurp.content | b64decode)
+             if (wire_tgt.stat.exists and not (wire_tgt.stat.islnk | default(false))
+                 and not (wire_tgt.stat.isdir | default(false)))
+             else '' }}
+
+    - name: "[{{ entry.tool }}:{{ entry.class }}] Classify action"
+      ansible.builtin.set_fact:
+        wire_action: >-
+          {{
+            'noop'
+              if (
+                (entry.sync == 'link'
+                 and wire_tgt.stat.islnk | default(false)
+                 and (wire_tgt.stat.lnk_target | default('')) == wire_source)
+                or (entry.sync == 'import'
+                    and wire_tgt.stat.exists
+                    and not (wire_tgt.stat.islnk | default(false))
+                    and not (wire_tgt.stat.isdir | default(false))
+                    and (wire_body | trim) == wire_stub)
+              )
+            else 'create'
+              if (
+                not wire_tgt.stat.exists
+                or (not (wire_tgt.stat.islnk | default(false))
+                    and not (wire_tgt.stat.isdir | default(false))
+                    and (wire_body | trim) == '')
+              )
+            else 'conflict'
+          }}
+
+    - name: "[{{ entry.tool }}:{{ entry.class }}] Record conflict (left untouched)"
+      ansible.builtin.set_fact:
+        ai_wire_conflicts: "{{ ai_wire_conflicts + [wire_target] }}"
+      when: wire_action == 'conflict'
+
+    - name: "[{{ entry.tool }}:{{ entry.class }}] Create symlink"
+      ansible.builtin.file:
+        src: "{{ wire_source }}"
+        dest: "{{ wire_target }}"
+        state: link
+        force: true
+      when:
+        - wire_action == 'create'
+        - entry.sync == 'link'
+
+    - name: "[{{ entry.tool }}:{{ entry.class }}] Write @import stub"
+      ansible.builtin.copy:
+        dest: "{{ wire_target }}"
+        content: "{{ wire_stub }}\n"
+        mode: "0644"
+      when:
+        - wire_action == 'create'
+        - entry.sync == 'import'
+...
