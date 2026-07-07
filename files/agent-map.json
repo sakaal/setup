@@ -15,12 +15,24 @@
     "non-reusable": "not worth generalizing (settings, model, toggles) — being tool-bound wouldn't stop translation, but this content has no meaning outside its tool, so we don't try. An explicit intentional-exclusion record; data only — no engine reads it."
   },
 
+  "scopes": {
+    "user": "resides in the user's home; applies to the user globally",
+    "repo": "resides in and applies to the whole repo — the working tree the tool runs in (tools variously call it project/workspace/repository; here it is always a git repo)"
+  },
+  "subscopes": {
+    ":path": "path-specific by location — a particular path or subtree (e.g. user:path)",
+    ":pattern": "glob-matched — applies to files matching a pattern (e.g. repo:pattern; Cursor 'globs:', Copilot 'applyTo:')"
+  },
+  "placeholders": {
+    "<cwd>": "in a path value, a slug of the absolute working-directory path the tool ran in (e.g. C--Users-you-projects-foo) — may be a repo, the home dir, or a remote session, not necessarily a repo name"
+  },
+
   "coverage": "Exhaustive and explicit: every store an enrolled tool keeps locally is listed under its lane in `entries` — including non-reusable data, named in the non-reusable section, never left to a default. Precedence, stated once: distribute and harvest entries win over the non-reusable wildcards, so a non-reusable `<dir>/**` means everything under that dir except what distribute/harvest already claim. Hence a tool's non-reusable remainder is a single bare wildcard, not a file list; call out an individual path only when it needs a flag (e.g. a secret). Entries are grouped by lane (not tagged per-entry) so the lane is structural. Only distribute entries carry a 'sync' mechanism; harvest and non-reusable are never machine-applied, so they omit it. A distribute 'sync':'ignore' is reusable content with no working hook here — the tool offers no file, or its emitter isn't built yet (see the entry's note).",
 
   "hub": {
     "dir": "~/.config/ai",
     "workspace_subdir": "ai",
-    "sources": ["AGENTS.md", "mcp.json", "commands", "skills", "agents"]
+    "sources": ["AGENTS.md", "mcp.json", "commands", "skills", "agents", "rules"]
   },
 
   "detect": {
@@ -44,39 +56,41 @@
 
       {"tool": "gemini-cli", "scope": "user", "class": "instructions", "path": "~/.gemini/GEMINI.md", "sync": "link", "source": "AGENTS.md", "note": "Or set contextFileName to AGENTS.md in settings.json."},
       {"tool": "gemini-cli", "scope": "user", "class": "mcp", "path": "~/.gemini/settings.json", "sync": "generate", "source": "mcp.json", "format": "mcp-json", "key": "mcpServers"},
-      {"tool": "gemini-cli", "scope": "user", "class": "commands", "path": "~/.gemini/commands", "sync": "ignore", "note": "Gemini commands are TOML, not Markdown — needs a 'wrap' emitter (format gemini-command) before syncing."},
+      {"tool": "gemini-cli", "scope": "user", "class": "commands", "path": "~/.gemini/commands", "sync": "ignore", "note": "TOML, not Markdown; needs a wrap emitter."},
 
-      {"tool": "cursor", "scope": "user", "class": "instructions", "path": null, "sync": "ignore", "note": "User Rules are app-managed; shared instructions reach Cursor at project scope via AGENTS.md."},
+      {"tool": "cursor", "scope": "user", "class": "instructions", "path": null, "sync": "ignore", "note": "User Rules are app-managed; shared instructions reach Cursor at repo scope via AGENTS.md."},
       {"tool": "cursor", "scope": "user", "class": "mcp", "path": "~/.cursor/mcp.json", "sync": "generate", "source": "mcp.json", "format": "mcp-json", "key": "mcpServers"},
 
       {"tool": "github-copilot", "scope": "user", "class": "instructions", "path": null, "sync": "ignore", "note": "IDE user settings; no standalone file."},
       {"tool": "github-copilot", "scope": "user", "class": "mcp", "path": null, "sync": "ignore", "note": "Editor-managed (e.g. VS Code mcp.json); path varies by editor/OS."},
 
-      {"tool": "claude-code", "scope": "project", "class": "instructions", "path": "CLAUDE.md", "sync": "import", "source": "AGENTS.md"},
-      {"tool": "claude-code", "scope": "project", "class": "mcp", "path": ".mcp.json", "sync": "generate", "source": "mcp.json", "format": "mcp-json", "key": "mcpServers"},
-      {"tool": "claude-code", "scope": "project", "class": "commands", "path": ".claude/commands", "sync": "link", "source": "commands"},
-      {"tool": "claude-code", "scope": "project", "class": "skills", "path": ".claude/skills", "sync": "link", "source": "skills"},
-      {"tool": "claude-code", "scope": "project", "class": "agents", "path": ".claude/agents", "sync": "link", "source": "agents"},
+      {"tool": "claude-code", "scope": "repo", "class": "instructions", "path": "CLAUDE.md", "sync": "import", "source": "AGENTS.md"},
+      {"tool": "claude-code", "scope": "repo", "class": "mcp", "path": ".mcp.json", "sync": "generate", "source": "mcp.json", "format": "mcp-json", "key": "mcpServers"},
+      {"tool": "claude-code", "scope": "repo", "class": "commands", "path": ".claude/commands", "sync": "link", "source": "commands"},
+      {"tool": "claude-code", "scope": "repo", "class": "skills", "path": ".claude/skills", "sync": "link", "source": "skills"},
+      {"tool": "claude-code", "scope": "repo", "class": "agents", "path": ".claude/agents", "sync": "link", "source": "agents"},
 
-      {"tool": "openai-codex", "scope": "project", "class": "instructions", "path": "AGENTS.md", "sync": "link", "source": "AGENTS.md", "note": "Read natively; the standard filename."},
+      {"tool": "openai-codex", "scope": "repo", "class": "instructions", "path": "AGENTS.md", "sync": "link", "source": "AGENTS.md", "note": "Read natively; the standard filename."},
 
-      {"tool": "gemini-cli", "scope": "project", "class": "instructions", "path": "GEMINI.md", "sync": "link", "source": "AGENTS.md"},
-      {"tool": "gemini-cli", "scope": "project", "class": "commands", "path": ".gemini/commands", "sync": "ignore", "note": "TOML — needs a wrap emitter."},
+      {"tool": "gemini-cli", "scope": "repo", "class": "instructions", "path": "GEMINI.md", "sync": "link", "source": "AGENTS.md"},
+      {"tool": "gemini-cli", "scope": "repo", "class": "commands", "path": ".gemini/commands", "sync": "ignore", "note": "TOML — needs a wrap emitter."},
 
-      {"tool": "cursor", "scope": "project", "class": "instructions", "path": "AGENTS.md", "sync": "link", "source": "AGENTS.md", "note": "Cursor reads AGENTS.md natively."},
-      {"tool": "cursor", "scope": "project", "class": "mcp", "path": ".cursor/mcp.json", "sync": "generate", "source": "mcp.json", "format": "mcp-json", "key": "mcpServers"},
-      {"tool": "cursor", "scope": "project", "class": "commands", "path": ".cursor/commands", "sync": "link", "source": "commands"},
+      {"tool": "cursor", "scope": "repo", "class": "instructions", "path": "AGENTS.md", "sync": "link", "source": "AGENTS.md", "note": "Cursor reads AGENTS.md natively."},
+      {"tool": "cursor", "scope": "repo", "class": "mcp", "path": ".cursor/mcp.json", "sync": "generate", "source": "mcp.json", "format": "mcp-json", "key": "mcpServers"},
+      {"tool": "cursor", "scope": "repo", "class": "commands", "path": ".cursor/commands", "sync": "link", "source": "commands"},
+      {"tool": "cursor", "scope": "repo:pattern", "class": "rules", "path": ".cursor/rules", "sync": "ignore", "note": "Glob-scoped ('globs:'); needs a wrap emitter."},
 
-      {"tool": "github-copilot", "scope": "project", "class": "instructions", "path": ".github/copilot-instructions.md", "sync": "import", "source": "AGENTS.md"},
-      {"tool": "github-copilot", "scope": "project", "class": "commands", "path": ".github/prompts", "sync": "link", "source": "commands", "note": "Prompt files (*.prompt.md)."},
-      {"tool": "github-copilot", "scope": "project", "class": "agents", "path": ".github/chatmodes", "sync": "link", "source": "agents", "note": "Custom chat modes (*.chatmode.md) — Copilot's agent equivalent."}
+      {"tool": "github-copilot", "scope": "repo", "class": "instructions", "path": ".github/copilot-instructions.md", "sync": "import", "source": "AGENTS.md"},
+      {"tool": "github-copilot", "scope": "repo", "class": "commands", "path": ".github/prompts", "sync": "link", "source": "commands", "note": "Prompt files (*.prompt.md)."},
+      {"tool": "github-copilot", "scope": "repo", "class": "agents", "path": ".github/chatmodes", "sync": "link", "source": "agents", "note": "Custom chat modes (*.chatmode.md) — Copilot's agent equivalent."},
+      {"tool": "github-copilot", "scope": "repo:pattern", "class": "rules", "path": ".github/instructions", "sync": "ignore", "note": "Glob-scoped ('applyTo:'); needs a wrap emitter."}
     ],
 
     "harvest": [
-      {"tool": "claude-code", "scope": "user", "class": "memory", "path": "~/.claude/projects/<project>/memory", "note": "Per-project auto-memory, stored under home not the repo. Distil into AGENTS.md by hand; do not push."},
-      {"tool": "claude-code", "scope": "user", "class": "memory-global", "path": "~/.claude/memory", "note": "Cross-project memory; same harvest treatment."},
+      {"tool": "claude-code", "scope": "user:path", "class": "memory", "path": "~/.claude/projects/<cwd>/memory", "note": "Auto-memory keyed by working dir (<cwd>), stored under home not the repo. Distil into AGENTS.md by hand; do not push."},
+      {"tool": "claude-code", "scope": "user", "class": "memory-global", "path": "~/.claude/memory", "note": "Cross-repo memory; same harvest treatment."},
       {"tool": "claude-code", "scope": "user", "class": "history", "path": "~/.claude/history.jsonl", "note": "Prompt/command history; raw upstream of memory. Mine and distil, never push."},
-      {"tool": "claude-code", "scope": "user", "class": "transcripts", "path": "~/.claude/projects/<project>/", "note": "Per-project session transcripts (JSONL); richest harvest source."}
+      {"tool": "claude-code", "scope": "user:path", "class": "transcripts", "path": "~/.claude/projects/<cwd>/*.jsonl", "note": "Session transcript .jsonl files (sibling to the memory/ dir); richest harvest source."}
     ],
 
     "non-reusable": [

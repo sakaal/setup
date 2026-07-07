@@ -7,7 +7,7 @@
 # recorded and halted, never clobbered.
 # generate/wrap entries: rendered by ~/bin/ai-sync (deployed and run below).
 #
-# Only user-scope entries are wired. Project-scope entries in the manifest
+# Only user-scope entries are wired. Repo-scope entries in the manifest
 # document per-repo locations and are applied inside a repo, not by setup.
 
 - name: Reset the wiring-conflict accumulator
@@ -18,7 +18,7 @@
   ansible.builtin.include_tasks: 09-ai-wire-one.yml
   loop: >-
     {{ ai_map.entries.distribute
-       | selectattr('scope', 'equalto', 'user')
+       | selectattr('scope', 'match', 'user($|:)')
        | selectattr('sync', 'in', ['link', 'import'])
        | list }}
   loop_control:

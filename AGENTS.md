@@ -132,14 +132,18 @@ own directory, use `$SCRIPT_DIR` (resolved early in `setup.sh`).
 ## AI-assistant configuration (realizes 5, 8, 9)
 
 `agent-map.json` is the authoritative, data-driven sync manifest: entries are
-grouped by **lane** (`distribute` / `harvest` / `non-reusable`), and each
-distribute entry carries its path, sync method (`link`/`import`/`generate`/
-`wrap`/`ignore`), and source. Both the playbook (stage 09, via `include_vars`)
-and `~/bin/ai-sync` (stdlib `json`) read the distribute lane and loop
-generically — no tool is enumerated in code. **harvest** entries locate the
-knowledge a curation run distils upward; **non-reusable** entries are a decision
-record; neither is machine-applied. Shared, agent-neutral content (`AGENTS.md`,
-`mcp.json`, and future `commands/`, `skills/`, `agents/`) lives in the private
+grouped by **lane** (`distribute` / `harvest` / `non-reusable`); each distribute
+entry carries its path, `sync` method (`link`/`import`/`generate`/`wrap`/`ignore`),
+and — where it has a working hook — a `source`/`format`. It also defines the
+`scope`/`subscope` vocabulary (`user`/`repo`, `:path`/`:pattern`) and the
+`<cwd>` placeholder convention; that legend is authoritative, so consult it
+rather than duplicating it here. Both the playbook (stage 09, via `include_vars`)
+and `~/bin/ai-sync` (stdlib `json`) read the distribute lane, matching scope by
+its base (`user`), and loop generically — no tool is enumerated in code.
+**harvest** entries locate the knowledge a curation run distils upward;
+**non-reusable** entries are a decision record; neither is machine-applied.
+Shared, agent-neutral content (`AGENTS.md`, `mcp.json`, and future `commands/`,
+`skills/`, `agents/`, `rules/`) lives in the private
 workspace repo's `ai/`; `~/.config/ai/` is a stable hub of symlinks to it, and
 tools are wired to the hub.
 
