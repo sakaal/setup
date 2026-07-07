@@ -7,7 +7,10 @@
 # Existing items in Pass are left alone (mismatches are reported, not
 # replaced).
 #
-# Naming policy:  id_<algo>_<user>@<machine>_<iso8601-datetime>
+# Naming policy:  id_<algo>_<user>@<fqdn>_<iso8601-datetime>
+#   <fqdn> names the key's scope — the FQDN it's used within: example.com for a
+#     key valid across that domain, a.b.example.com for one bound to that host.
+#     Where no real DNS name fits, use an equally unambiguous qualifier.
 #   <iso8601-datetime> may be:
 #     - year + month:     2019-04, 201904
 #     - date only:        2019-04-01, 20190401
@@ -17,10 +20,10 @@
 #     - optional trailing Z (UTC indicator): 2014-08-19T054009Z
 #
 # Examples that match:
-#   id_rsa_alice@hostA_2024-01
-#   id_rsa_alice@workstation_2024-06-30
-#   id_ed25519_alice@laptop_20240412T1430
-#   id_ecdsa_alice@server_2014-08-19T054009Z
+#   id_rsa_alice@host-a.example.com_2024-01
+#   id_rsa_alice@workstation.example.net_2024-06-30
+#   id_ed25519_alice@laptop.example.org_20240412T1430
+#   id_ecdsa_alice@server.example.com_2014-08-19T054009Z
 #
 # For each matching private key file:
 #   - Validate it's an unencrypted SSH private key
