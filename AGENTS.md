@@ -3,7 +3,8 @@
 Personal workspace bootstrap for a fresh Mac or Linux machine. User-facing
 description in [README.md](README.md). This is the agent-neutral context an
 agent needs to work in this repo well; `CLAUDE.md` is a one-line `@import` of
-it (the repo dogfooding the very pattern it ships).
+it (the repo dogfooding the very pattern it ships). `legacy/` is a preserved
+2018 version — do not modify.
 
 ## Goal
 
@@ -23,8 +24,9 @@ they are realized here, and cites them rather than restating them.
 3. **Anchor only upstream.** Depend solely on external services (git host,
    Proton, Apple, OS package sources). Nothing the bootstrap configures may be
    a dependency of the bootstrap.
-4. **No fixed home.** Run from wherever the working copy lives; insist on no
-   install location.
+4. **No fixed home.** Run from wherever the working copy lives. The curl
+   one-liner's `~/setup` is a default, not a required location; a local clone
+   runs in place.
 5. **Public mechanism, private content.** This repo is safe to publish: only
    *how*, never the operator's *what*. Personal content lives in a separate
    private repo referenced by convention.
@@ -117,7 +119,7 @@ tool/class entry carries its path and sync method (`link`/`import`/`generate`/
 enumerated in code. Shared, agent-neutral content (`AGENTS.md`, `mcp.json`, and
 future `commands/`, `skills/`, `agents/`) lives in the private workspace repo's
 `ai/`; `~/.config/ai/` is a stable hub of symlinks to it, and tools are wired to
-the hub. The public repo holds only the mechanism.
+the hub.
 
 ## Platform handling (realizes 6)
 
@@ -160,8 +162,7 @@ PAT mint, generation choices) belong here, not in `setup.sh`.
 
 - **Shell**: `set -uo pipefail` only (deliberately *not* `-e` — it conflicts
   with error isolation in batch tool installs).
-- **Console output**: severity-tagged, prefixed `✗ / ! / →` (realizes 7 — no
-  JSON, no OTel, no run-id correlation).
+- **Console output**: severity-tagged, prefixed `✗ / ! / →`.
 - **Task files**: two-digit numbering (`01-discover.yml`, `02-ssh-keys.yml`, …).
 - **Ansible modules**: FQCN (`ansible.builtin.command`, `community.general.ini_file`).
 - **Secrets**: `no_log: true` on every task that touches a secret value.
@@ -178,19 +179,3 @@ objects (GitHub renders the tag message). Semver `vMAJOR.MINOR.PATCH`.
 
 Entry URL per ref (deterministic, live once the tag is pushed):
 `https://raw.githubusercontent.com/sakaal/setup/<ref>/setup.sh`
-
-## Repo layout
-
-```
-setup.sh           Bash entry point — installs prereqs, hands off to ansible
-setup.yml          Ansible orchestrator — imports tasks/01..09 sequentially
-hosts.yml          Localhost-only inventory
-tasks/NN-name.yml  Per-stage task files; numbered with two digits
-files/             Static files deployed verbatim by stages (agent-map.json, ai-sync, …)
-keys/              Manually-triggered utility scripts (NOT in unattended path)
-legacy/            2018 version of this repo; preserved for reference; do not modify
-AGENTS.md          Agent context (this file) — charter + operational guide
-CLAUDE.md          One-line @import of AGENTS.md
-README.md          User-facing
-.gitignore         Minimal
-```
