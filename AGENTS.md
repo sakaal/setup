@@ -3,8 +3,7 @@
 Personal workspace bootstrap for a fresh Mac or Linux machine. User-facing
 description in [README.md](README.md). This is the agent-neutral context an
 agent needs to work in this repo well; `CLAUDE.md` is a one-line `@import` of
-it (the repo dogfooding the very pattern it ships). `legacy/` is a preserved
-2018 version — do not modify.
+it (the repo dogfooding the very pattern it ships).
 
 ## Goal
 
@@ -179,3 +178,8 @@ objects (GitHub renders the tag message). Semver `vMAJOR.MINOR.PATCH`.
 
 Entry URL per ref (deterministic, live once the tag is pushed):
 `https://raw.githubusercontent.com/sakaal/setup/<ref>/setup.sh`
+
+## Notes
+
+- `legacy/` is a frozen 2018 snapshot, kept for reference only — leave it
+  untouched.
