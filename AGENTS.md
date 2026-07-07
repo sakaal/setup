@@ -136,7 +136,7 @@ grouped by **lane** (`distribute` / `harvest` / `non-reusable`); each distribute
 entry carries its path, `sync` method (`link`/`import`/`generate`/`wrap`/`ignore`),
 and — where it has a working hook — a `source`/`format`. It also defines the
 `scope`/`subscope` vocabulary (`user`/`repo`, `:path`/`:pattern`) and the
-`<cwd>` placeholder convention; that legend is authoritative, so consult it
+`<slug>` placeholder convention; that legend is authoritative, so consult it
 rather than duplicating it here. Both the playbook (stage 09, via `include_vars`)
 and `~/bin/ai-sync` (stdlib `json`) read the distribute lane, matching scope by
 its base (`user`), and loop generically — no tool is enumerated in code.
