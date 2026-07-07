@@ -14,10 +14,10 @@
   ansible.builtin.set_fact:
     ai_wire_conflicts: []
 
-- name: Wire each user-scope link/import entry
+- name: Wire each user-scope link/import entry (distribute lane only)
   ansible.builtin.include_tasks: 09-ai-wire-one.yml
   loop: >-
-    {{ ai_map.entries
+    {{ ai_map.entries.distribute
        | selectattr('scope', 'equalto', 'user')
        | selectattr('sync', 'in', ['link', 'import'])
        | list }}

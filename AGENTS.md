@@ -37,6 +37,26 @@ they are realized here, and cites them rather than restating them.
 8. **Data-driven where open-ended.** Where the set is unbounded (which AI
    tools, which servers), one manifest describes it and the code loops
    generically — adding one is a data edit, not code.
+9. **Complete, lane-categorized coverage.** Every local store an enrolled AI
+   tool keeps — configuration, data, or runtime state — is represented in
+   `agent-map.json`, under its lane:
+   - **distribute** — one shared source fanned out to many tools (instructions,
+     MCP, commands, skills, agents); applied automatically by the sync engine.
+   - **harvest** — knowledge the tool accumulates (memory, session history);
+     distilled *up* into the distribute sources by human-curated runs, never
+     pushed down (not scripted yet).
+   - **non-reusable** — settings, model, toggles; being tool-bound wouldn't
+     stop translation, but this content has no meaning outside its tool, so we
+     don't try. An explicit record that it is intentionally left alone.
+
+   Entries are grouped by lane in the manifest, so the lane is structural; only
+   distribute entries carry a `sync` mechanism. Coverage is **exhaustive and
+   explicit**: every store an enrolled tool keeps locally is accounted for —
+   never left to a default. Distribute and harvest entries are individual and
+   **take precedence**, so a tool's non-reusable remainder is a single bare
+   wildcard over its dir (`<dir>/**` = everything not already carved out) — not
+   a file-by-file list. Call out an individual non-reusable path only when it
+   needs a flag (e.g. a secret).
 
 **Boundaries (do not add):**
 
@@ -109,16 +129,19 @@ repo ignores every sibling directory, so a setup clone placed inside the
 workspace directory is invisible to its git tracking. If you need the script's
 own directory, use `$SCRIPT_DIR` (resolved early in `setup.sh`).
 
-## AI-assistant configuration (realizes 5, 8)
+## AI-assistant configuration (realizes 5, 8, 9)
 
-`agent-map.json` is the authoritative, data-driven sync manifest: every
-tool/class entry carries its path and sync method (`link`/`import`/`generate`/
-`wrap`/`ignore`). Both the playbook (stage 09, via `include_vars`) and
-`~/bin/ai-sync` (stdlib `json`) read it and loop generically — no tool is
-enumerated in code. Shared, agent-neutral content (`AGENTS.md`, `mcp.json`, and
-future `commands/`, `skills/`, `agents/`) lives in the private workspace repo's
-`ai/`; `~/.config/ai/` is a stable hub of symlinks to it, and tools are wired to
-the hub.
+`agent-map.json` is the authoritative, data-driven sync manifest: entries are
+grouped by **lane** (`distribute` / `harvest` / `non-reusable`), and each
+distribute entry carries its path, sync method (`link`/`import`/`generate`/
+`wrap`/`ignore`), and source. Both the playbook (stage 09, via `include_vars`)
+and `~/bin/ai-sync` (stdlib `json`) read the distribute lane and loop
+generically — no tool is enumerated in code. **harvest** entries locate the
+knowledge a curation run distils upward; **non-reusable** entries are a decision
+record; neither is machine-applied. Shared, agent-neutral content (`AGENTS.md`,
+`mcp.json`, and future `commands/`, `skills/`, `agents/`) lives in the private
+workspace repo's `ai/`; `~/.config/ai/` is a stable hub of symlinks to it, and
+tools are wired to the hub.
 
 ## Platform handling (realizes 6)
 
