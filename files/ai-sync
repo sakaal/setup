@@ -1,28 +1,25 @@
 #!/usr/bin/env python3
 #
-# ai-sync — render the canonical MCP server list into each AI assistant present
-# on this machine, non-destructively. Deployed by setup; do not edit — edit
-# setup's source (files/ai-sync) instead.
+# ai-sync — render shared, agent-neutral sources into each present tool's own
+# format, driven entirely by ~/.config/ai/agent-map.json. Deployed by setup; do
+# not edit — edit setup's source (files/ai-sync) instead.
 #
-# Source of truth: ~/.config/ai/mcp.json — a JSON object with an "mcpServers"
-# map of <name> -> command / args / env (see agent-map.yml for which tools it
-# is rendered into, and how).
+# This is the content-transform half of the sync architecture (the "generate"
+# and "wrap" methods). Symlinks and @import stubs (the "link"/"import" methods)
+# are laid by the setup playbook, not here. Both halves read the same manifest
+# and loop it generically — no tool is hardcoded; adding one is a manifest edit.
 #
-# Behaviour is strictly ADD-ONLY: for each server listed in mcp.json it is
-# added to a tool only if that tool has no server of the same name. An existing
-# same-named entry is left exactly as-is (reported as "in sync" if identical,
-# "differs" if not) — this never overwrites hand-tuned config, and never deletes
-# entries the tool already has. Re-run after editing mcp.json; inert while the
-# list is empty. Uses only the standard library (works on Python 3.9+).
+# For each user-scope entry whose method needs a content transform, this looks
+# up an emitter by the entry's "format" and applies it. Emitters are add-only
+# and non-destructive: they add what is missing, leave anything already present
+# (reporting a divergent same-named item as a conflict), and never delete.
+# Uses only the standard library (works on the system python3, 3.9+).
 
 import json
 import os
 import re
 import sys
 
-# The report lines use the repo's severity glyphs (→ ! ✗); force UTF-8 output
-# so they never trip a non-UTF-8 locale (bash's printf writes raw bytes, this
-# is the Python equivalent).
 for _stream in (sys.stdout, sys.stderr):
     try:
         _stream.reconfigure(encoding="utf-8")
@@ -30,75 +27,87 @@ for _stream in (sys.stdout, sys.stderr):
         pass
 
 HOME = os.path.expanduser("~")
-SRC = os.path.join(HOME, ".config", "ai", "mcp.json")
+CONFIG = os.path.join(HOME, ".config", "ai")
+MANIFEST = os.path.join(CONFIG, "agent-map.json")
 
 changed = []
 conflicts = []
 insync = []
 
 
-def load_servers():
+def expand(path):
+    return os.path.expanduser(path)
+
+
+def load_json_file(path):
     try:
-        with open(SRC, encoding="utf-8") as fh:
-            data = json.load(fh)
+        with open(path, encoding="utf-8") as fh:
+            text = fh.read()
+        return json.loads(text) if text.strip() else {}
     except FileNotFoundError:
-        return dict()
+        return None
     except (ValueError, OSError) as exc:
-        sys.stderr.write("✗ error: cannot read %s: %s\n" % (SRC, exc))
-        sys.exit(1)
+        sys.stderr.write("✗ error: cannot read %s: %s\n" % (path, exc))
+        return None
+
+
+def mcp_servers_from(source_path):
+    data = load_json_file(source_path)
+    if not isinstance(data, dict):
+        return {}
     servers = data.get("mcpServers")
-    return servers if isinstance(servers, dict) else dict()
+    return servers if isinstance(servers, dict) else {}
 
 
-def sync_json(path, key, servers, create_if_missing):
+def write_atomic(path, text):
+    tmp = path + ".ai-sync.tmp"
+    with open(tmp, "w", encoding="utf-8") as fh:
+        fh.write(text)
+    os.replace(tmp, path)
+
+
+def toml_key(name):
+    # Bare TOML keys allow only A-Za-z0-9_-; anything else must be quoted.
+    if re.fullmatch(r"[A-Za-z0-9_-]+", name):
+        return name
+    return json.dumps(name)
+
+
+# ── Emitters: (entry, source_path) -> mutate entry's target file ──────────
+
+def emit_mcp_json(entry, source_path):
+    servers = mcp_servers_from(source_path)
+    if not servers:
+        return
+    path = expand(entry["path"])
+    key = entry.get("key", "mcpServers")
     if os.path.exists(path):
-        try:
-            with open(path, encoding="utf-8") as fh:
-                text = fh.read()
-            data = json.loads(text) if text.strip() else dict()
-        except (ValueError, OSError) as exc:
-            sys.stderr.write("! skip %s: cannot parse (%s)\n" % (path, exc))
+        data = load_json_file(path)
+        if data is None:
             return
-    elif create_if_missing:
-        data = dict()
+    elif entry.get("create", True):
+        data = {}
     else:
         return
-
     if not isinstance(data, dict):
         sys.stderr.write("! skip %s: top level is not an object\n" % path)
         return
-
     existing = data.get(key)
     if not isinstance(existing, dict):
-        existing = dict()
-
+        existing = {}
     added = 0
     for name, spec in servers.items():
         if name in existing:
-            if existing[name] == spec:
-                insync.append("%s: %s" % (path, name))
-            else:
-                conflicts.append("%s: %s differs (left as-is)" % (path, name))
+            (insync if existing[name] == spec
+             else conflicts).append("%s: %s%s" % (path, name,
+                                     "" if existing[name] == spec else " differs (left as-is)"))
             continue
         existing[name] = spec
         added += 1
-
     if added:
         data[key] = existing
-        tmp = path + ".ai-sync.tmp"
-        with open(tmp, "w", encoding="utf-8") as fh:
-            json.dump(data, fh, indent=2)
-            fh.write("\n")
-        os.replace(tmp, path)
+        write_atomic(path, json.dumps(data, indent=2) + "\n")
         changed.append("%s (+%d server(s))" % (path, added))
-
-
-def toml_key(s):
-    # Bare TOML keys allow only A-Za-z0-9_-; anything else must be quoted
-    # (a JSON string literal is also a valid TOML basic string).
-    if re.fullmatch(r"[A-Za-z0-9_-]+", s):
-        return s
-    return json.dumps(s)
 
 
 def render_toml_table(name, spec):
@@ -115,10 +124,13 @@ def render_toml_table(name, spec):
     return "\n".join(lines)
 
 
-def sync_toml(path, servers):
-    # No TOML parser ships in the stdlib before 3.11, so operate on text: a
-    # server is considered present iff its table header exists. Add-only; never
-    # edits or removes an existing table.
+def emit_mcp_toml(entry, source_path):
+    # No TOML parser in the stdlib before 3.11, so operate on text: a server is
+    # present iff its table header exists. Add-only; never edits an existing one.
+    servers = mcp_servers_from(source_path)
+    if not servers:
+        return
+    path = expand(entry["path"])
     try:
         with open(path, encoding="utf-8") as fh:
             text = fh.read()
@@ -127,62 +139,61 @@ def sync_toml(path, servers):
     except OSError as exc:
         sys.stderr.write("! skip %s: %s\n" % (path, exc))
         return
-
     additions = []
     for name, spec in servers.items():
-        # Match the server's table header whether written bare or quoted.
         header = re.compile(r"(?m)^\s*\[mcp_servers\.(?:%s|%s)\]"
                             % (re.escape(name), re.escape(json.dumps(name))))
         if header.search(text):
             insync.append("%s: %s" % (path, name))
         else:
             additions.append(render_toml_table(name, spec))
-
     if additions:
-        new = text
-        if new and not new.endswith("\n"):
-            new += "\n"
-        new += "\n" + "\n\n".join(additions) + "\n"
-        tmp = path + ".ai-sync.tmp"
-        with open(tmp, "w", encoding="utf-8") as fh:
-            fh.write(new)
-        os.replace(tmp, path)
+        if text and not text.endswith("\n"):
+            text += "\n"
+        write_atomic(path, text + "\n" + "\n\n".join(additions) + "\n")
         changed.append("%s (+%d server(s))" % (path, len(additions)))
 
 
+EMITTERS = {
+    "mcp-json": emit_mcp_json,
+    "mcp-toml": emit_mcp_toml,
+}
+
+
 def main():
-    servers = load_servers()
-    if not servers:
-        print("→ mcp.json lists no servers; nothing to sync")
-        return
+    manifest = load_json_file(MANIFEST)
+    if not isinstance(manifest, dict):
+        sys.stderr.write("✗ error: no usable manifest at %s\n" % MANIFEST)
+        sys.exit(1)
+    detect = manifest.get("detect", {})
 
-    # Claude Code — merge only into an existing ~/.claude.json (that file holds
-    # much more than MCP, so we never create it from scratch here).
-    if os.path.isdir(os.path.join(HOME, ".claude")) \
-            and os.path.exists(os.path.join(HOME, ".claude.json")):
-        sync_json(os.path.join(HOME, ".claude.json"), "mcpServers", servers,
-                  create_if_missing=False)
+    def present(tool):
+        d = detect.get(tool)
+        return bool(d) and os.path.isdir(expand(d))
 
-    # Cursor — dedicated MCP file; safe to create.
-    if os.path.isdir(os.path.join(HOME, ".cursor")):
-        sync_json(os.path.join(HOME, ".cursor", "mcp.json"), "mcpServers", servers,
-                  create_if_missing=True)
-
-    # Gemini CLI — settings file; create if absent.
-    if os.path.isdir(os.path.join(HOME, ".gemini")):
-        sync_json(os.path.join(HOME, ".gemini", "settings.json"), "mcpServers", servers,
-                  create_if_missing=True)
-
-    # Codex CLI — TOML config.
-    if os.path.isdir(os.path.join(HOME, ".codex")):
-        sync_toml(os.path.join(HOME, ".codex", "config.toml"), servers)
+    acted = False
+    for entry in manifest.get("entries", []):
+        if entry.get("scope") != "user":
+            continue
+        if entry.get("sync") not in ("generate", "wrap"):
+            continue
+        if not entry.get("path") or not present(entry["tool"]):
+            continue
+        acted = True
+        emitter = EMITTERS.get(entry.get("format"))
+        if emitter is None:
+            sys.stderr.write("! skip %s: no emitter for format '%s'\n"
+                             % (entry["path"], entry.get("format")))
+            continue
+        source = os.path.join(CONFIG, entry["source"])
+        emitter(entry, source)
 
     for item in changed:
         print("→ changed: %s" % item)
     for item in conflicts:
         print("! conflict: %s" % item)
-    if insync and not changed and not conflicts:
-        print("→ all present tools already in sync")
+    if not changed and not conflicts:
+        print("→ nothing to sync" if not acted else "→ all present tools already in sync")
 
 
 if __name__ == "__main__":

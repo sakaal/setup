@@ -1,65 +1,38 @@
 ---
-# 09-ai-sync.yml — wire each assistant present on this machine to the hub
-# (~/.config/ai/, symlinks into the private workspace repo's ai/ directory),
-# non-destructively. Imported by 09-ai-config.yml.
+# 09-ai-sync.yml — wire each present tool to the hub and render generated
+# formats, driven by the manifest (ai_map). Imported by 09-ai-config.yml.
 #
-# Instructions (prose): point each present tool's user-scope instruction file
-# at the hub ~/.config/ai/AGENTS.md — a symlink for tools that don't rewrite
-# the file, a one-line @import stub for tools that do (Claude Code). Only tools
-# actually present (their config dir exists) are touched. A target that already
-# holds content and isn't our stub/symlink is NEVER overwritten: it is recorded
-# and the stage halts so its handling can be decided.
+# link/import entries (here): point a tool's own path at a hub source,
+# non-destructively — absent/empty/already-ours → act/noop; real content →
+# recorded and halted, never clobbered.
+# generate/wrap entries: rendered by ~/bin/ai-sync (deployed and run below).
 #
-# MCP: ~/bin/ai-sync renders ~/.config/ai/mcp.json (a symlink to the workspace
-# repo's ai/mcp.json) into each present tool's own MCP config, add-only (never
-# edits or deletes entries you already have). Inert while mcp.json is absent or
-# lists no servers.
+# Only user-scope entries are wired. Project-scope entries in the manifest
+# document per-repo locations and are applied inside a repo, not by setup.
 
-- name: Stat the hub AGENTS.md link (dangling is fine; absent means no ai-config)
-  ansible.builtin.stat:
-    path: "{{ home_dir }}/.config/ai/AGENTS.md"
-    follow: false
-  register: hub_agents
-
-- name: Fail if the hub link is missing (run the ai-config tag first)
-  ansible.builtin.fail:
-    msg: >-
-      {{ home_dir }}/.config/ai/AGENTS.md does not exist. Run the ai-config tag
-      (or the full playbook) first to lay the hub links.
-  when:
-    - not hub_agents.stat.exists
-    - not ansible_check_mode
-
-- name: Reset the instruction-conflict accumulator
+- name: Reset the wiring-conflict accumulator
   ansible.builtin.set_fact:
-    ai_link_conflicts: []
+    ai_wire_conflicts: []
 
-- name: Wire each present tool's instruction file to the hub AGENTS.md
-  ansible.builtin.include_tasks: 09-ai-link-one.yml
-  loop:
-    - dir: "{{ home_dir }}/.claude"
-      path: "{{ home_dir }}/.claude/CLAUDE.md"
-      method: import
-    - dir: "{{ home_dir }}/.codex"
-      path: "{{ home_dir }}/.codex/AGENTS.md"
-      method: symlink
-    - dir: "{{ home_dir }}/.gemini"
-      path: "{{ home_dir }}/.gemini/GEMINI.md"
-      method: symlink
+- name: Wire each user-scope link/import entry
+  ansible.builtin.include_tasks: 09-ai-wire-one.yml
+  loop: >-
+    {{ ai_map.entries
+       | selectattr('scope', 'equalto', 'user')
+       | selectattr('sync', 'in', ['link', 'import'])
+       | list }}
   loop_control:
-    loop_var: link
-    label: "{{ link.path }}"
+    loop_var: entry
+    label: "{{ entry.tool }}:{{ entry.class }}"
 
-- name: Halt on instruction-file conflicts (nothing was overwritten)
+- name: Halt on wiring conflicts (nothing was overwritten)
   ansible.builtin.fail:
     msg: >-
-      Refusing to overwrite existing AI instruction file(s) that already hold
-      content and are not the shared stub/symlink:
-      {{ ai_link_conflicts | join(', ') }}. Nothing was changed for these.
-      Reconcile each (e.g. move its content into the workspace repo's
-      ai/AGENTS.md, then let setup replace it with the stub/symlink) and re-run
-      — or skip this step with --skip-tags ai-sync.
-  when: ai_link_conflicts | length > 0
+      Refusing to overwrite existing tool file(s) that hold content and are not
+      the shared link/stub: {{ ai_wire_conflicts | join(', ') }}. Reconcile each
+      (move its content into the workspace repo's ai/, remove the local path)
+      and re-run — or skip with --skip-tags ai-sync.
+  when: ai_wire_conflicts | length > 0
 
 - name: Ensure ~/bin exists
   ansible.builtin.file:
@@ -67,19 +40,19 @@
     state: directory
     mode: "0755"
 
-- name: Deploy the MCP generator (~/bin/ai-sync)
+- name: Deploy the format renderer (~/bin/ai-sync)
   ansible.builtin.copy:
     src: ai-sync
     dest: "{{ home_dir }}/bin/ai-sync"
     mode: "0755"
 
-- name: Render mcp.json into each present tool (add-only; inert if empty)
+- name: Render generated formats into each present tool
   ansible.builtin.command:
     cmd: "{{ home_dir }}/bin/ai-sync"
   register: ai_sync_run
   changed_when: "'changed:' in ai_sync_run.stdout"
 
-- name: MCP sync report
+- name: Render report
   ansible.builtin.debug:
     msg: "{{ ai_sync_run.stdout_lines }}"
   when: ai_sync_run.stdout_lines | default([]) | length > 0

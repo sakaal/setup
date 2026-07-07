@@ -128,11 +128,13 @@ find) its own clone, and is ignored when you run from a working copy.
 7. Configures a machine-local baseline: global gitignore, `~/.local/bin` on
    PATH, and AI-assistant wiring. The agent-neutral sources — `ai/AGENTS.md`
    (instructions) and `ai/mcp.json` (MCP server list) — live in the private
-   workspace repo, not here; `~/.config/ai/` holds stable symlinks to them
-   plus `agent-map.yml` (which tool uses which file, and how it's synced).
-   Present tools are pointed at the hub via symlink/`@import` stub, and
-   `~/bin/ai-sync` renders the MCP list into each tool's own config —
-   add-only, never overwriting existing entries.
+   workspace repo, not here; `~/.config/ai/` holds stable symlinks to them.
+   A single data-driven manifest, `agent-map.json`, maps every tool/class to
+   its path and sync method; both the playbook and `~/bin/ai-sync` read it and
+   loop generically, so adding a tool is a manifest edit, not code. Present
+   tools are pointed at the hub via symlink/`@import` stub, and `ai-sync`
+   renders the MCP list into each tool's own format — add-only, never
+   overwriting existing entries.
 
 ## Repository layout
 
