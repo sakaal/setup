@@ -1,5 +1,5 @@
 {
-  "_note": "Managed by setup (tasks/09-ai-config.yml). Authoritative, data-driven sync manifest — read natively by Ansible (include_vars) and by ~/bin/ai-sync (json). Adding a tool or class is a data edit here; the engines never enumerate tools. Edit the source in the setup repo, not the deployed copy.",
+  "_note": "Managed by setup (tasks/09-ai-config.yml). Authoritative, data-driven sync manifest — read natively by Ansible (include_vars) and by ~/bin/ai-sync and ~/bin/ai-harvest (json). Adding a tool or class is a data edit here; the engines never enumerate tools. Edit the source in the setup repo, not the deployed copy.",
 
   "methods": {
     "link": "symlink target -> hub source (tool reads the source's native format from that path)",
@@ -10,8 +10,8 @@
   },
 
   "lanes": {
-    "distribute": "one shared source fanned out to many tools; applied automatically by the sync engine (link/import/generate/wrap). The ONLY lane the engines read.",
-    "harvest": "knowledge the tool accumulates (memory, history, sessions); distilled UP into the distribute sources by human-curated runs, never pushed down (not scripted yet). Data only — no engine reads it.",
+    "distribute": "one shared source fanned out to many tools; applied automatically by the sync engine (link/import/generate/wrap). The only lane anything is machine-applied from.",
+    "harvest": "knowledge the tool accumulates (memory, history, sessions); cataloged read-only by ~/bin/ai-harvest into ~/.local/state/ai/harvest/, then distilled UP into the distribute sources by human-curated runs — never pushed down, never machine-applied.",
     "non-reusable": "not worth generalizing (settings, model, toggles) — being tool-bound wouldn't stop translation, but this content has no meaning outside its tool, so we don't try. An explicit intentional-exclusion record; data only — no engine reads it."
   },
 
@@ -24,7 +24,7 @@
     ":pattern": "glob-matched — applies to files matching a pattern (e.g. repo:pattern; Cursor 'globs:', Copilot 'applyTo:')"
   },
   "placeholders": {
-    "<slug>": "in a path value, a slug of the working-directory path the tool ran in (e.g. C--Users-you-projects-foo) — may refer to a repo, the home dir, or a remote session, not necessarily a repo name"
+    "{slug}": "in a path value, a slug of the working-directory path the tool ran in (e.g. C--Users-you-projects-foo) — may refer to a repo, the home dir, or a remote session, not necessarily a repo name. Path values are URI templates (RFC 6570 style): ai-harvest expands a placeholder segment to each directory present at that point and records the matched name; a value containing '://' is a verbatim URL, never expanded."
   },
 
   "coverage": "Exhaustive and explicit: every store an enrolled tool keeps locally is listed under its lane in `entries` — including non-reusable data, named in the non-reusable section, never left to a default. Precedence, stated once: distribute and harvest entries win over the non-reusable wildcards, so a non-reusable `<dir>/**` means everything under that dir except what distribute/harvest already claim. Hence a tool's non-reusable remainder is a single bare wildcard, not a file list; call out an individual path only when it needs a flag (e.g. a secret). Entries are grouped by lane (not tagged per-entry) so the lane is structural. Only distribute entries carry a 'sync' mechanism; harvest and non-reusable are never machine-applied, so they omit it. A distribute 'sync':'ignore' is reusable content with no working hook here — the tool offers no file, or its emitter isn't built yet (see the entry's note).",
@@ -87,10 +87,10 @@
     ],
 
     "harvest": [
-      {"tool": "claude-code", "scope": "user:path", "class": "memory", "path": "~/.claude/projects/<slug>/memory", "note": "Auto-memory keyed by working dir (<slug>), stored under home not the repo. Distil into AGENTS.md by hand; do not push."},
+      {"tool": "claude-code", "scope": "user:path", "class": "memory", "path": "~/.claude/projects/{slug}/memory", "note": "Auto-memory keyed by working dir ({slug}), stored under home not the repo. Distil into AGENTS.md by hand; do not push."},
       {"tool": "claude-code", "scope": "user", "class": "memory-global", "path": "~/.claude/memory", "note": "Cross-repo memory; same harvest treatment."},
       {"tool": "claude-code", "scope": "user", "class": "history", "path": "~/.claude/history.jsonl", "note": "Prompt/command history; raw upstream of memory. Mine and distil, never push."},
-      {"tool": "claude-code", "scope": "user:path", "class": "transcripts", "path": "~/.claude/projects/<slug>/*.jsonl", "note": "Session transcript .jsonl files (sibling to the memory/ dir); richest harvest source."}
+      {"tool": "claude-code", "scope": "user:path", "class": "transcripts", "path": "~/.claude/projects/{slug}/*.jsonl", "note": "Session transcript .jsonl files (sibling to the memory/ dir); richest harvest source."}
     ],
 
     "non-reusable": [

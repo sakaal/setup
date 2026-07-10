@@ -134,7 +134,10 @@ find) its own clone, and is ignored when you run from a working copy.
    loop generically, so adding a tool is a manifest edit, not code. Present
    tools are pointed at the hub via symlink/`@import` stub, and `ai-sync`
    renders the MCP list into each tool's own format — add-only, never
-   overwriting existing entries.
+   overwriting existing entries. A companion `~/bin/ai-harvest` (deployed,
+   never run by the bootstrap) catalogs each tool's accumulated knowledge —
+   memory, session transcripts — for later human-curated distillation back
+   into the shared sources.
 
 ## Repository layout
 

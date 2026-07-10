@@ -1,0 +1,214 @@
+#!/usr/bin/env python3
+#
+# ai-harvest — deterministic collection stage of the harvest pipeline: locate
+# every locally present resource named by the harvest lane of
+# ~/.config/ai/agent-map.json and write a catalog of absolute URLs with
+# integrity metadata under ~/.local/state/ai/harvest/. Deployed by setup; do
+# not edit — edit setup's source (files/ai-harvest) instead.
+#
+# Resolution, never discovery: a resource enters the catalog iff a harvest
+# entry names it and it exists locally — no scanning, no content sniffing, so
+# no false hits by construction. Manifest path values are URI templates
+# (RFC 6570 style): a {slug} segment expands to each directory present at
+# that point (the matched name is recorded as the entry's slug), a glob
+# segment matches by fnmatch, and a value containing '://' is a verbatim URL,
+# listed as-is and never expanded or dereferenced. A declared directory is
+# walked in full — everything under it is the entry's by the manifest's
+# precedence rule.
+#
+# The distillation stage (human-curated, probabilistic) consumes the catalog
+# and lands reviewed output in the workspace repo's ai/ sources. This stage
+# reads content only to hash it — nothing is executed, rendered, or fetched,
+# and nothing is ever written to a cataloged path.
+# Uses only the standard library (works on the system python3, 3.9+).
+
+import fnmatch
+import hashlib
+import json
+import os
+import re
+import sys
+from datetime import datetime, timezone
+from pathlib import Path
+
+for _stream in (sys.stdout, sys.stderr):
+    try:
+        _stream.reconfigure(encoding="utf-8")
+    except (AttributeError, ValueError):
+        pass
+
+HOME = os.path.expanduser("~")
+CONFIG = os.path.join(HOME, ".config", "ai")
+MANIFEST = os.path.join(CONFIG, "agent-map.json")
+STATE = os.path.join(HOME, ".local", "state", "ai", "harvest")
+
+PLACEHOLDER = re.compile(r"\{[a-z_]+\}")
+GLOB_CHARS = ("*", "?", "[")
+
+
+def load_json_file(path):
+    try:
+        with open(path, encoding="utf-8") as fh:
+            text = fh.read()
+        return json.loads(text) if text.strip() else {}
+    except FileNotFoundError:
+        return None
+    except (ValueError, OSError) as exc:
+        sys.stderr.write("✗ error: cannot read %s: %s\n" % (path, exc))
+        return None
+
+
+def sha256_of(path):
+    digest = hashlib.sha256()
+    with open(path, "rb") as fh:
+        for chunk in iter(lambda: fh.read(1 << 20), b""):
+            digest.update(chunk)
+    return digest.hexdigest()
+
+
+def iso_utc(timestamp):
+    return datetime.fromtimestamp(timestamp, timezone.utc).strftime(
+        "%Y-%m-%dT%H:%M:%SZ")
+
+
+def resolve(template):
+    """Yield (slug, path) for every existing path the URI-template path value
+    names. slug is the directory name a {slug} segment matched, else None."""
+    parts = Path(os.path.expanduser(template)).parts
+
+    def walk(base, segments, slug):
+        if not segments:
+            yield slug, base
+            return
+        seg, rest = segments[0], segments[1:]
+        if PLACEHOLDER.fullmatch(seg):
+            try:
+                names = sorted(os.listdir(base))
+            except OSError:
+                return
+            for name in names:
+                child = os.path.join(base, name)
+                if os.path.isdir(child):
+                    yield from walk(child, rest,
+                                    name if seg == "{slug}" else slug)
+        elif any(ch in seg for ch in GLOB_CHARS):
+            try:
+                names = sorted(os.listdir(base))
+            except OSError:
+                return
+            for name in names:
+                if fnmatch.fnmatch(name, seg):
+                    yield from walk(os.path.join(base, name), rest, slug)
+        else:
+            child = os.path.join(base, seg)
+            if os.path.exists(child):
+                yield from walk(child, rest, slug)
+
+    yield from walk(parts[0], list(parts[1:]), None)
+
+
+def files_under(path):
+    if os.path.isfile(path):
+        yield path
+    elif os.path.isdir(path):
+        for root, dirs, names in os.walk(path):
+            dirs.sort()
+            for name in sorted(names):
+                child = os.path.join(root, name)
+                if os.path.isfile(child):
+                    yield child
+
+
+def record(entry, slug, path):
+    stat = os.stat(path)
+    rec = {
+        "tool": entry["tool"],
+        "class": entry["class"],
+        "scope": entry["scope"],
+        "slug": slug,
+        "url": Path(path).as_uri(),
+        "size": stat.st_size,
+        "mtime": iso_utc(stat.st_mtime),
+        "sha256": sha256_of(path),
+        "note": entry.get("note"),
+    }
+    return {k: v for k, v in rec.items() if v is not None}
+
+
+def main():
+    manifest = load_json_file(MANIFEST)
+    if not isinstance(manifest, dict):
+        sys.stderr.write("✗ error: no usable manifest at %s\n" % MANIFEST)
+        sys.exit(1)
+    detect = manifest.get("detect", {})
+
+    def present(tool):
+        d = detect.get(tool)
+        return bool(d) and os.path.isdir(os.path.expanduser(d))
+
+    resources = []
+    absent = []
+    for entry in manifest.get("entries", {}).get("harvest", []):
+        where = {"tool": entry.get("tool"), "class": entry.get("class"),
+                 "path": entry.get("path")}
+        if not entry.get("path"):
+            absent.append(dict(where, reason="no path declared"))
+            continue
+        if "://" in entry["path"]:
+            rec = {"tool": entry["tool"], "class": entry["class"],
+                   "scope": entry["scope"], "url": entry["path"],
+                   "note": entry.get("note")}
+            resources.append({k: v for k, v in rec.items() if v is not None})
+            continue
+        if not present(entry["tool"]):
+            absent.append(dict(where, reason="tool not present"))
+            continue
+        found = 0
+        for slug, path in resolve(entry["path"]):
+            for child in files_under(path):
+                try:
+                    resources.append(record(entry, slug, child))
+                    found += 1
+                except OSError as exc:
+                    sys.stderr.write("! skip %s: %s\n" % (child, exc))
+        if not found:
+            absent.append(dict(where, reason="no matching files"))
+
+    now = datetime.now(timezone.utc)
+    os.makedirs(STATE, mode=0o700, exist_ok=True)
+    os.chmod(STATE, 0o700)
+
+    catalog = {
+        "_note": "ai-harvest catalog — deterministic resolution of the"
+                 " harvest lane of %s; URLs and integrity metadata only, no"
+                 " content. Input for the distillation stage." % MANIFEST,
+        "generated": now.strftime("%Y-%m-%dT%H:%M:%SZ"),
+        "manifest": MANIFEST,
+        "resources": resources,
+        "absent": absent,
+    }
+    catalog_name = "catalog-%s.json" % now.strftime("%Y%m%dT%H%M%SZ")
+    catalog_path = os.path.join(STATE, catalog_name)
+    tmp = catalog_path + ".tmp"
+    with open(tmp, "w", encoding="utf-8") as fh:
+        json.dump(catalog, fh, indent=2)
+        fh.write("\n")
+    os.replace(tmp, catalog_path)
+    os.chmod(catalog_path, 0o600)
+
+    latest = os.path.join(STATE, "latest")
+    tmp_link = latest + ".tmp"
+    try:
+        os.remove(tmp_link)
+    except FileNotFoundError:
+        pass
+    os.symlink(catalog_name, tmp_link)
+    os.replace(tmp_link, latest)
+
+    print("→ cataloged %d resource(s); %d source(s) absent"
+          % (len(resources), len(absent)))
+    print("→ wrote %s" % catalog_path)
+
+
+if __name__ == "__main__":
+    main()

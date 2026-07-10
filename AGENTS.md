@@ -43,8 +43,8 @@ they are realized here, and cites them rather than restating them.
    - **distribute** — one shared source fanned out to many tools (instructions,
      MCP, commands, skills, agents); applied automatically by the sync engine.
    - **harvest** — knowledge the tool accumulates (memory, session history);
-     distilled *up* into the distribute sources by human-curated runs, never
-     pushed down (not scripted yet).
+     cataloged read-only by `~/bin/ai-harvest`, then distilled *up* into the
+     distribute sources by human-curated runs, never pushed down.
    - **non-reusable** — settings, model, toggles; being tool-bound wouldn't
      stop translation, but this content has no meaning outside its tool, so we
      don't try. An explicit record that it is intentionally left alone.
@@ -136,12 +136,23 @@ grouped by **lane** (`distribute` / `harvest` / `non-reusable`); each distribute
 entry carries its path, `sync` method (`link`/`import`/`generate`/`wrap`/`ignore`),
 and — where it has a working hook — a `source`/`format`. It also defines the
 `scope`/`subscope` vocabulary (`user`/`repo`, `:path`/`:pattern`) and the
-`<slug>` placeholder convention; that legend is authoritative, so consult it
+`{slug}` placeholder convention (path values are RFC 6570-style URI templates);
+that legend is authoritative, so consult it
 rather than duplicating it here. Both the playbook (stage 09, via `include_vars`)
 and `~/bin/ai-sync` (stdlib `json`) read the distribute lane, matching scope by
 its base (`user`), and loop generically — no tool is enumerated in code.
-**harvest** entries locate the knowledge a curation run distils upward;
-**non-reusable** entries are a decision record; neither is machine-applied.
+**harvest** entries locate the knowledge a curation run distils upward.
+`~/bin/ai-harvest` (deployed by stage 09, run manually at curation time)
+resolves them deterministically — a `{slug}` segment expands to the
+directories present at that point, a glob segment to matching files, a `://`
+value is a verbatim URL, never expanded or dereferenced — and writes a
+catalog of absolute URLs with size/mtime/sha256 under
+`~/.local/state/ai/harvest/` (`latest` points at the newest run). Collection
+reads content only to hash it and never writes to tool paths; distillation
+(human-curated, probabilistic) consumes the catalog and lands reviewed output
+in the workspace repo's `ai/` sources — nothing flows from harvest into
+distribution without review. **non-reusable** entries are a decision record;
+nothing is machine-applied from either lane.
 Shared, agent-neutral content (`AGENTS.md`, `mcp.json`, and future `commands/`,
 `skills/`, `agents/`, `rules/`) lives in the private
 workspace repo's `ai/`; `~/.config/ai/` is a stable hub of symlinks to it, and
