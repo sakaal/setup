@@ -692,38 +692,34 @@ def prepare(run_dir=None):
 
 
 def write_report(run_dir, items, excluded, denylist):
-    lines = ["# Distillation work package", "",
-             "Sanitized, exact-deduplicated derived items (reqs 1–3). This is"
-             " input for the distillation session, not a proposal.", "",
-             "- items: %d" % len(items),
-             "- excluded/invalid: %d" % len(excluded),
-             "- identifier denylist size: %d" % len(denylist), ""]
+    """The run digest — a summary and minimalist lists, not a content dump.
+    prepare writes the deterministic input side (attention flags, mechanical
+    exclusions); the session appends the routing outcomes (quarantine first,
+    promotions last) at the end of the run. The full item text lives in
+    items.json and, once distilled, in the git diff, so it is not repeated
+    here. This file is kept as a small forensic record after items.json is
+    pruned on apply."""
     flagged = [it for it in items if it["opacity_score"] or it["annotations"]]
+    lines = ["# Distillation run digest", "",
+             "- candidate items: %d" % len(items),
+             "- flagged for attention: %d" % len(flagged),
+             "- excluded (mechanical): %d" % len(excluded),
+             "- identifier denylist: %d" % len(denylist), ""]
     if flagged:
-        lines += ["## Flagged for attention (opacity / lookalikes)", ""]
+        lines += ["## Needs attention (opacity / lookalikes)", ""]
         for it in flagged:
             kinds = ",".join(sorted({a["kind"] for a in it["annotations"]}))
-            lines.append("- `%s` opacity=%d annotations=[%s] slugs=%d"
+            lines.append("- `%s` opacity=%d [%s] slugs=%d"
                          % (it["id"], it["opacity_score"], kinds, len(it["slugs"])))
         lines.append("")
-    lines += ["## Items", ""]
-    for it in items:
-        lines += ["### `%s` (%s · %d source(s) · %d chars · opacity %d)"
-                  % (it["id"], it["class"], len(it["slugs"]), it["chars"],
-                     it["opacity_score"]),
-                  "", "slugs: %s" % (", ".join(it["slugs"]) or "—"), ""]
-        for a in it["annotations"]:
-            if a["kind"] == "revealed-text":
-                lines += ["> revealed (depth %d) from `%s`:" % (a["depth"], a["from"]),
-                          "> ", "> " + a["text"].replace("\n", "\n> "), ""]
-            else:
-                lines += ["> annotation: %s" % a.get("note", a["kind"]), ""]
-        lines += ["```````markdown", it["text"].rstrip("\n"), "```````", ""]
     if excluded:
-        lines += ["## Excluded / invalid", ""]
+        lines += ["## Excluded (mechanical)", ""]
         for e in excluded:
             lines.append("- %s — %s" % (e["reason"], e["url"]))
         lines.append("")
+    lines += ["<!-- The session appends routing outcomes below:"
+              " quarantined, suggest-to-repo, discarded, then promoted"
+              " (minimal id → target). -->", ""]
     path = os.path.join(run_dir, "report.md")
     with open(path, "w", encoding="utf-8") as fh:
         fh.write("\n".join(lines) + "\n")
@@ -853,6 +849,16 @@ def apply(run_dir, name=None):
         t["applied"] = True
         save_targets(run_dir, targets)
         print("→ %s: merged %s into %s; worktree removed" % (nm, branch, live))
+    # Prune the one large, reconstructable intermediate (items.json) once every
+    # target is resolved. Keep report.md, quarantine/, denylist.json,
+    # targets.json — small state and forensic material — as the run record.
+    if all(t.get("applied") or t.get("discarded")
+           for t in targets["targets"].values()):
+        big = os.path.join(run_dir, "items.json")
+        if os.path.exists(big):
+            os.remove(big)
+            print("→ pruned items.json (large intermediate; rebuildable from"
+                  " the catalog); kept report.md, quarantine/, and run state")
     print("→ done — the change is committed in the live repo history.")
 
 

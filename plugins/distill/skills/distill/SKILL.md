@@ -38,7 +38,9 @@ never route around it.
   recurrence signal), `provenance` (catalog URLs), `annotations`,
   `opacity_score`.
 - `denylist.json` — identifiers to redact (slugs, repo, org/host).
-- `report.md` — the same, human-readable, with a "flagged for attention" list.
+- `report.md` — the run digest (counts, attention flags, mechanical
+  exclusions); you append the routing outcomes to it at the end (see below).
+  Not a content dump — the item text is in `items.json`.
 - The current `ai/` sources (the hub, `~/.config/ai/`) — the baseline for
   deduplication and contradiction checks.
 
@@ -184,21 +186,42 @@ is recoverable downstream, pay up where it is not. To change a tier, edit the
 - [ ] Commit messages carry provenance; merged items note the full source union.
 - [ ] You edited only the *worktree*; the live `ai/` is untouched.
 
+## Record the routing (report.md)
+
+`prepare` wrote the deterministic top of `<run>/report.md` (counts, the
+attention flags, the mechanical exclusions). Before applying, append the
+routing outcomes below its placeholder comment, grouped attention-first, as a
+minimalist list — not a content dump (the content is in the git diff and the
+quarantine files):
+
+```
+## Quarantined (N)
+- `<id>` — <why> (quarantine/<file>)
+## Suggested to repos (N)
+- `<id>` → <repo>
+## Discarded (N)
+- `<id>` — <reason>
+## Promoted (N)   (content: the git diff / this run's commit)
+- `<id>` → ai/AGENTS.md
+```
+
+This is the durable record kept after `items.json` is pruned on apply.
+
 ## Review and apply (the final phase)
 
-The git diff of the worktree branch **is** the proposal; there is no separate
+The git diff of the worktree branch is the proposal; there is no separate
 REVIEW.md. The run is not done until the branch is merged into the live `ai/`.
 
 1. **Surface it.** Give the operator the worktree path and show the change:
    `git -C <run>/worktree-workspace diff`. Summarize the promotions, and list
    any quarantined items and suggest-to-repo candidates.
 2. **Gate, then discuss.** Ensure `ai-distill gate <run>` is clean. The operator
-   may approve or request edits — reword, retarget (`ai/AGENTS.md` vs
-   `ai/rules/<label>.md`), drop, reclassify. Make each edit **in the worktree**
-   and re-gate, then show the refreshed diff. Loop until they approve.
+   may approve or request edits (reword, retarget `ai/AGENTS.md` vs
+   `ai/rules/<label>.md`, drop, reclassify). Make each edit in the worktree and
+   re-gate, then show the refreshed diff. Loop until they approve.
 3. **Apply.** On approval, `~/bin/ai-distill apply <run>` re-gates, merges
-   `distill/<run>` into the live branch (the live `ai/` updates at once), and
-   removes the worktree and branch. On rejection,
+   `distill/<run>` into the live branch, removes the worktree and branch, and
+   prunes `items.json` (the run digest and quarantine pen stay). On rejection,
    `~/bin/ai-distill discard <run>`.
 4. **Done.** The merge is the completion; the change is committed in the `ai/`
    history and the next `setup`/`ai-sync` distributes it to every tool.

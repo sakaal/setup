@@ -199,11 +199,19 @@ printf '\n- A note about %s handling.\n' "$TOK" >> "$WT/ai/AGENTS.md"; chk "iden
 # clean prose (a new rules file the session creates) -> gate clean
 mkdir -p "$WT/ai/rules"; printf '## Distilled\n- Prefer small, reviewable changes.\n' > "$WT/ai/rules/process.md"; chk "clean" 0
 
+# report.md is a slim digest (no full-text dump)
+grep -qE '``````markdown|^## Items' "$RUN2/report.md" && { echo "✗ report.md still dumps item text"; FAILED=1; }
+
 # apply merges into the live tree and removes the worktree
 AI_WORKSPACE_DIR="$WS" python3 "$DISTILL" apply "$RUN2" >/dev/null 2>&1 || { echo "✗ apply failed"; exit 1; }
 grep -q "reviewable changes" "$WS/ai/rules/process.md" || { echo "✗ apply did not merge into live ai/"; FAILED=1; }
 [ -d "$WT" ] && { echo "✗ worktree not removed after apply"; FAILED=1; }
 git -C "$WS" branch --list 'distill/*' | grep -q distill && { echo "✗ distill branch left behind"; FAILED=1; }
+# apply prunes the large items.json but keeps the forensic record
+[ -f "$RUN2/items.json" ] && { echo "✗ items.json not pruned after apply"; FAILED=1; }
+for keep in report.md denylist.json targets.json quarantine; do
+  [ -e "$RUN2/$keep" ] || { echo "✗ apply removed forensic artifact: $keep"; FAILED=1; }
+done
 
 # discard removes an unapplied worktree
 RUN3="$FIXTURE/run3"
