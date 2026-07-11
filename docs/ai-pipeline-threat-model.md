@@ -451,39 +451,57 @@ handles content, 4 every stage that reads content into a model.
    revocable via git history. A full corroboration pass too expensive to run
    would protect nothing.
 
-9. **Prose only; executable configuration never flows.** The proposal schema
-   has no representation for MCP servers, hooks, or scripted skills. An
+9. **Prose only; executable configuration never flows.** The distilled `ai/`
+   carries prose instructions, never MCP servers, hooks, or scripted skills.
+   The gate rejects a change that touches an executable/config file or whose
+   added content is executable JSON (`mcpServers`, command/args). An
    instruction can still be wrong; it cannot be a command line. (Complements
    §5.1: MCP changes are always direct human edits.)
 
-10. **Itemized, provenance-carrying proposals.** Output is a list of items —
-    statement, disposition (`promote-global` / `suggest-to-repo` /
-    `discard-trivial` / `discard-specific` / `quarantine`), and the catalog
-    URLs it derived from — validated against schema and allowed target paths
-    before a human sees it. Provenance makes review real and enables
-    retroactive revocation when a source is later found poisoned.
+10. **The proposal is a reviewable git diff with provenance.** The session
+    writes the distilled `ai/` directly in a git worktree on branch
+    `distill/<run>`, off the live path; the proposal *is* that branch's diff —
+    adds, edits, and removals across files — and the provenance rides in the
+    commit messages (`git blame` keeps it per-line, permanently). No bespoke
+    proposal format to drift from the real files; the `ai/` git history becomes
+    the audit trail, and a source later found poisoned is traced and reverted
+    by ordinary git.
 
-11. **Secret scan on the proposal.** Every proposed item is scanned before
-    review with established secret-scanning tooling (gitleaks-class — use
-    the best available scanner, do not hand-roll detection); addresses the
-    non-URL half of T2 (secrets smuggled into text destined for public
-    repos).
+11. **Secret scan on the diff.** The gate scans the branch diff's added lines
+    with established secret-scanning tooling (gitleaks-class — use the best
+    available scanner, do not hand-roll detection); addresses the non-URL half
+    of T2 (secrets smuggled into text destined for public repos).
 
-12. **Staged, sandboxed, human-gated.** The distiller writes proposals to a
-    staging area only; it has no write access to workspace `ai/`. A human
-    reviews the itemized diff and commits (TB4). Incremental runs (catalog
-    high-water mark) keep diffs small enough that review is genuine rather
-    than rubber-stamp — a review gate that always shows 400 items is a rubber
-    stamp with extra steps.
+12. **Worktree-staged, human-gated, merged deterministically.** The session
+    never edits the LIVE `ai/` (the write-guard hook blocks it); it edits the
+    run's *worktree*, off the path the tools read. The operator reviews the
+    branch diff and iterates (edit the worktree, re-run `gate`, which
+    re-validates) until they approve. Only then does a deterministic step
+    (`ai-distill apply`) re-gate and **merge the reviewed branch** into the live
+    branch — updating the live `ai/` at once — then remove the worktree and
+    branch so no loose copy remains (TB4). Two properties make this the hard
+    control: the human gate is the *approval* (nothing lands un-reviewed), and
+    because apply merges exactly the reviewed branch, the live `ai/` is what was
+    reviewed — no drift, and no path for the session to slip un-approved text in
+    (live edits are blocked; only apply's merge mutates the live tree). Suspected
+    injections are set aside in the run's quarantine pen, outside every repo,
+    applied only on an explicit false-alarm call. The same worktree/gate/apply
+    machinery, pointed at another repo (`add-target`), handles the
+    `suggest-to-repo` side channel — with that repo's own identifiers allowed,
+    since they belong there. Incremental runs keep each diff small enough that
+    review is genuine rather than rubber-stamp.
 
 **Implementation shape.** The requirements are logical stages; how many
 passes implement them is an implementation choice. The intended shape is
 hybrid: deterministic bookends as scripts — *prepare* (read, verify,
-sanitize, exact-duplicate elimination, work-package emission) and *accept*
-(schema and prose-only validation, identifier and secret scans, recurrence
-bookkeeping, staging) — around a **human-supervised agent session** (an
-agent plugin with skills, not a script calling a model API; the pipeline
-manages no model credentials) performing stages 4–8. Within the session,
+sanitize, exact-duplicate elimination, work-package emission, and a git
+worktree on branch `distill/<run>` off the live path) and *gate*/*apply*
+(checks on the branch diff — prose only, identifier and secret scans — then a
+merge of the reviewed branch into the live tree and worktree cleanup) — around
+a **human-supervised agent session** (an agent plugin with skills, not a
+script calling a model API; the pipeline manages no model credentials)
+performing stages 4–8 by writing the distilled `ai/` directly in the worktree.
+Within the session,
 the per-item judgments (5.b, 6, 8.a signals) batch many items per call;
 deduplication is comparative, so it blocks by label and takes one call per
 label-block (items carry several labels, so blocks overlap and their merge
@@ -521,10 +539,11 @@ Priority order; R1–R3 are cheap relative to their risk reduction.
   commit to `ai/`. Periodically audit `git log -- ai/`. Escalation path if
   ever warranted: protected branch + commit signing.
 - **R4 (T1): land §7 as code.** *Largely implemented* — the deterministic
-  gates live in `ai-distill accept` (schema, prose-only, recurrence,
-  identifier and secret scans), the `distill` plugin's skill carries the
-  runbook checklist, and a session-scoped hook blocks writes to `ai/`; so the
-  gate's preconditions are checked, not remembered. Remaining: exercise the
+  gates live in `ai-distill gate`/`apply` (prose-only, identifier and secret
+  scans on the branch diff; merge only a re-gated branch), the `distill`
+  plugin's skill carries the runbook checklist, and a session-scoped hook
+  blocks writes to the live `ai/`; so the gate's preconditions are checked,
+  not remembered. Remaining: exercise the
   inference middle on a real run and tune thresholds.
 - **R5 (T11, hygiene): treat harvest stores as secret-bearing.** They
   already sit under `~/.claude` with default permissions; consider

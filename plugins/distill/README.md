@@ -10,11 +10,15 @@ lands in the shared sources without human review.
 
 - `~/bin/ai-harvest` — fresh catalog of the harvestable sources
 - `~/bin/ai-distill` — deterministic *prepare* (read, verify, sanitize,
-  exact-dedup, work package) and *accept* (schema, prose-only, identifier
-  and secret scans, staging)
+  exact-dedup, work package, and a git worktree on branch `distill/<run>`),
+  *gate* (checks on the branch diff: no secrets, no executable config, no
+  un-redacted identifiers, only `ai/` prose files), and *apply* (merge the
+  reviewed branch into the live `ai/` and remove the worktree) — plus
+  *discard* and *add-target* for rejected runs and the suggest-to-repo side
+  channel
 - this plugin — the inference middle (generalize → categorize → deduplicate
-  → triage) as skills-guided, batched agent work with per-stage model tiers,
-  followed by the operator's review of the staged proposal
+  → triage) that writes the distilled `ai/` directly in the worktree, then
+  guides the operator through the `git diff` review, `apply`, and cleanup
 
 The plugin's parts: `commands/distill.md` (the `/distill` entry),
 `skills/distill/SKILL.md` (the runbook, with the language register and the

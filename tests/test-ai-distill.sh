@@ -170,76 +170,48 @@ print("→ prepare ok: %d items, %d excluded, sanitization asserted" %
 PY
 [ $? -eq 0 ] || exit 1
 
-# ── accept: build proposals and assert the gates ───────────────────────────
-run_accept() {  # $1=label $2=expected_exit ; proposal already written
-  python3 "$DISTILL" accept "$RUN" >/dev/null 2>&1
-  local got=$?
-  if [ "$got" -ne "$2" ]; then
-    echo "✗ accept[$1]: expected exit $2, got $got"; return 1
-  fi
-  return 0
-}
+# ── Worktree flow: prepare (git workspace) → gate → apply / discard ─────────
+WS="$FIXTURE/ws"
+git init -q -b main "$WS"; git -C "$WS" config user.email t@t; git -C "$WS" config user.name t
+mkdir -p "$WS/ai/rules"; printf '# AGENTS\n\nconstitution.\n' > "$WS/ai/AGENTS.md"
+git -C "$WS" add -A && git -C "$WS" commit -qm init
 
-# Resolve the 2-slug item's provenance URLs and a single-slug URL.
-read -r P1 P2 SINGLE ACME <<<"$(python3 - "$RUN" <<'PY'
-import json, sys
-wp = json.load(open(sys.argv[1] + "/items.json"))
-dup = [it for it in wp["items"] if len(it["slugs"]) == 2][0]
-single = [it for it in wp["items"] if len(it["slugs"]) == 1
-          and it["opacity_score"] == 0 and not it["annotations"]][0]
-acme = [it for it in wp["items"] if "acmecorp" in " ".join(it["slugs"]).lower()][0]
-print(dup["provenance"][0], dup["provenance"][1], single["provenance"][0],
-      acme["provenance"][0])
-PY
-)"
+RUN2="$FIXTURE/run2"
+AI_WORKSPACE_DIR="$WS" python3 "$DISTILL" prepare "$RUN2" >/dev/null 2>&1 || { echo "✗ prepare(worktree) failed"; exit 1; }
+WT=$(python3 -c "import json;print(json.load(open('$RUN2/targets.json'))['targets']['workspace']['worktree'])")
+[ -d "$WT/ai" ] || { echo "✗ worktree not created"; exit 1; }
+[ -d "$RUN2/quarantine" ] || { echo "✗ quarantine pen not created"; exit 1; }
 
-mkproposal() { printf '%s\n' "$1" > "$RUN/proposal.json"; }
 FAILED=0
+gate() { AI_WORKSPACE_DIR="$WS" python3 "$DISTILL" gate "$RUN2" >/dev/null 2>&1; }
+reset_wt() { git -C "$WT" reset -q --hard 2>/dev/null; git -C "$WT" clean -fdq 2>/dev/null; }
+chk() { gate; local got=$?; [ "$got" -eq "$2" ] || { echo "✗ gate[$1]: want $2 got $got"; FAILED=1; }; }
 
-# valid promote-global (recurrence 2, clean, under ai/) -> accept
-mkproposal "{\"items\":[{\"statement\":\"Prefer retry with backoff behind gateway APIs.\",\"disposition\":\"promote-global\",\"category\":\"http\",\"provenance\":[\"$P1\",\"$P2\"],\"target\":\"ai/AGENTS.md\"}]}"
-run_accept "valid-promote" 0 || FAILED=1
+# secret in added lines -> reject
+printf '\n- token ghp_ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789\n' >> "$WT/ai/AGENTS.md"; chk "secret" 1; reset_wt
+# executable config content pasted into prose -> reject
+printf '\n- {"mcpServers":{"x":{"command":"node"}}}\n' >> "$WT/ai/AGENTS.md"; chk "exec-content" 1; reset_wt
+# a non-ai / config file changed -> reject
+printf 'x\n' > "$WT/mcp.json"; git -C "$WT" add mcp.json; chk "non-ai-file" 1; reset_wt
+# unredacted identifier in the hub -> reject
+TOK=$(python3 -c "import json;d=json.load(open('$RUN2/denylist.json'))['identifiers'];print(next((t for t in d if 'acme' in t.lower()), d[0] if d else 'zzz'))")
+printf '\n- A note about %s handling.\n' "$TOK" >> "$WT/ai/AGENTS.md"; chk "identifier" 1; reset_wt
+# clean prose (a new rules file the session creates) -> gate clean
+mkdir -p "$WT/ai/rules"; printf '## Distilled\n- Prefer small, reviewable changes.\n' > "$WT/ai/rules/process.md"; chk "clean" 0
 
-# promote-global single source -> accept (recurrence is advisory, not a veto)
-mkproposal "{\"items\":[{\"statement\":\"Some general sounding rule.\",\"disposition\":\"promote-global\",\"category\":\"x\",\"provenance\":[\"$SINGLE\"],\"target\":\"ai/AGENTS.md\"}]}"
-run_accept "single-source-promote" 0 || FAILED=1
+# apply merges into the live tree and removes the worktree
+AI_WORKSPACE_DIR="$WS" python3 "$DISTILL" apply "$RUN2" >/dev/null 2>&1 || { echo "✗ apply failed"; exit 1; }
+grep -q "reviewable changes" "$WS/ai/rules/process.md" || { echo "✗ apply did not merge into live ai/"; FAILED=1; }
+[ -d "$WT" ] && { echo "✗ worktree not removed after apply"; FAILED=1; }
+git -C "$WS" branch --list 'distill/*' | grep -q distill && { echo "✗ distill branch left behind"; FAILED=1; }
 
-# unredacted identifier -> reject
-mkproposal "{\"items\":[{\"statement\":\"Acmecorp needs special handling everywhere.\",\"disposition\":\"promote-global\",\"category\":\"x\",\"provenance\":[\"$P1\",\"$P2\"],\"target\":\"ai/AGENTS.md\"}]}"
-run_accept "identifier-hit" 1 || FAILED=1
-
-# unknown provenance url -> reject
-mkproposal "{\"items\":[{\"statement\":\"Fine rule.\",\"disposition\":\"promote-global\",\"category\":\"x\",\"provenance\":[\"file:///nope/x.md\"],\"target\":\"ai/AGENTS.md\"}]}"
-run_accept "unknown-provenance" 1 || FAILED=1
-
-# secret in statement -> reject
-mkproposal "{\"items\":[{\"statement\":\"Use token ghp_ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789 for access.\",\"disposition\":\"promote-global\",\"category\":\"x\",\"provenance\":[\"$P1\",\"$P2\"],\"target\":\"ai/AGENTS.md\"}]}"
-run_accept "secret-hit" 1 || FAILED=1
-
-# executable configuration (mcpServers) -> reject (prose only)
-mkproposal "{\"items\":[{\"statement\":\"{\\\"mcpServers\\\": {\\\"x\\\": {\\\"command\\\": \\\"node\\\"}}}\",\"disposition\":\"promote-global\",\"category\":\"x\",\"provenance\":[\"$P1\",\"$P2\"],\"target\":\"ai/AGENTS.md\"}]}"
-run_accept "executable-config" 1 || FAILED=1
-
-# hooks JSON (no mcpServers/command top key) -> reject (subsumed by json check)
-mkproposal "{\"items\":[{\"statement\":\"{\\\"hooks\\\": {\\\"PreToolUse\\\": [1]}}\",\"disposition\":\"promote-global\",\"category\":\"x\",\"provenance\":[\"$P1\",\"$P2\"],\"target\":\"ai/AGENTS.md\"}]}"
-run_accept "hooks-config" 1 || FAILED=1
-
-# bad target (not under ai/) -> reject
-mkproposal "{\"items\":[{\"statement\":\"Fine rule.\",\"disposition\":\"promote-global\",\"category\":\"x\",\"provenance\":[\"$P1\",\"$P2\"],\"target\":\"/etc/passwd\"}]}"
-run_accept "bad-target" 1 || FAILED=1
-
-# executable-config target (ai/mcp.json) with prose -> reject (narrowed HUB_TARGET)
-mkproposal "{\"items\":[{\"statement\":\"Prefer the existing helper over a new one.\",\"disposition\":\"promote-global\",\"category\":\"x\",\"provenance\":[\"$P1\",\"$P2\"],\"target\":\"ai/mcp.json\"}]}"
-run_accept "mcp-target" 1 || FAILED=1
-
-# lowercase imperative prose that mentions a flag -> accept (not a command line)
-mkproposal "{\"items\":[{\"statement\":\"always pass --no-verify when committing generated files\",\"disposition\":\"promote-global\",\"category\":\"x\",\"provenance\":[\"$SINGLE\"],\"target\":\"ai/rules/process.md\"}]}"
-run_accept "prose-with-flag" 0 || FAILED=1
-
-# suggest-to-repo single source -> accept (no recurrence requirement)
-mkproposal "{\"items\":[{\"statement\":\"A project specific convention.\",\"disposition\":\"suggest-to-repo\",\"category\":\"x\",\"provenance\":[\"$SINGLE\"],\"target\":\"repo/AGENTS.md\"}]}"
-run_accept "suggest-single" 0 || FAILED=1
+# discard removes an unapplied worktree
+RUN3="$FIXTURE/run3"
+AI_WORKSPACE_DIR="$WS" python3 "$DISTILL" prepare "$RUN3" >/dev/null 2>&1
+WT3=$(python3 -c "import json;print(json.load(open('$RUN3/targets.json'))['targets']['workspace']['worktree'])")
+AI_WORKSPACE_DIR="$WS" python3 "$DISTILL" discard "$RUN3" >/dev/null 2>&1
+[ -d "$WT3" ] && { echo "✗ worktree not removed after discard"; FAILED=1; }
 
 [ "$FAILED" -eq 0 ] || exit 1
-echo "→ accept ok: all gate cases behaved as expected"
-echo "→ ok: ai-distill prepare + accept asserted"
+echo "→ worktree flow ok: gate rejects secret/exec/non-ai/identifier; clean applies+cleans up; discard cleans up"
+echo "→ ok: ai-distill prepare + gate + apply + discard asserted"
