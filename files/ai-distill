@@ -492,47 +492,102 @@ def remove_worktree(target):
     return ok and not os.path.exists(wt)
 
 
+HUNK_HEADER = re.compile(r"^@@ -\d+(?:,(\d+))? \+\d+(?:,(\d+))? @@")
+
+
 def worktree_change(target):
-    """Structured change of a worktree vs its base. Uses git's own machine
-    output — not text scraping — so deletions, renames, and binary files are
-    all seen. Returns (paths, added_lines, has_binary):
+    """Structured change of a worktree vs its base, read from git's own machine
+    output — never text-scraped — so deletions, renames, binary files, symlinks
+    and mode changes are all seen. Returns (paths, added_lines, has_binary,
+    nonregular):
       paths       — every path touched (adds, mods, deletes, both rename ends)
-      added_lines — content added, hunk-aware (a content line starting with
-                    '+', e.g. '++x', is not mistaken for the '+++' header)
+      added_lines — the exact content added, extracted by each hunk's declared
+                    line counts (not by sniffing a line's leading character —
+                    which a crafted '++'/header-shaped line could spoof), split
+                    on '\\n' only (str.splitlines would also break on U+2028/
+                    U+2029/NEL/VT/FF, orphaning part of a line out of the scan)
       has_binary  — any binary file among the changes
+      nonregular  — [(path, mode)] for any new object that is not a regular file
+                    (100644): symlink (120000), gitlink (160000), or the exec
+                    bit (100755) — a filesystem-escape / non-prose vector (req 9)
     `add -N` (intent-to-add) makes untracked files show in the diff without
     staging their content, so the gate stays read-only-ish."""
     wt, base = target["worktree"], target["base"]
     git(wt, "add", "-N", "-A")
     paths = set()
-    for line in git(wt, "diff", "--name-status", base).stdout.splitlines():
+    for line in git(wt, "diff", "--name-status", base).stdout.split("\n"):
         cols = line.split("\t")
         # A/M/D <path>, or R###/C### <old> <new> — take every named path.
         paths.update(c for c in cols[1:] if c)
+    # Destination mode of every change, from --raw: `:<src> <dst> <sha> <sha>
+    # <status>\t<path>[\t<path>]`. The meta half is space-separated and never
+    # quoted (only the trailing path is), so partitioning on the first tab is
+    # safe. Anything whose new mode is not a regular file (or a deletion) is a
+    # non-prose vector — a symlink can point out of the repo, a gitlink pulls in
+    # a submodule, the exec bit turns a "prose" file runnable.
+    nonregular = []
+    for line in git(wt, "diff", "--raw", base).stdout.split("\n"):
+        if not line.startswith(":"):
+            continue
+        meta, _, rest = line.partition("\t")
+        fields = meta[1:].split()
+        if len(fields) < 2:
+            continue
+        dstmode = fields[1]
+        if dstmode not in ("100644", "000000"):   # regular file / deleted
+            nonregular.append((rest.split("\t")[-1] if rest else "", dstmode))
     has_binary = False
-    for line in git(wt, "diff", "--numstat", base).stdout.splitlines():
+    for line in git(wt, "diff", "--numstat", base).stdout.split("\n"):
         cols = line.split("\t")
         if len(cols) >= 2 and cols[0] == "-" and cols[1] == "-":
             has_binary = True
-    added, in_hunk = [], False
-    for line in git(wt, "diff", "--unified=0", base).stdout.splitlines():
-        if line.startswith("@@"):
-            in_hunk = True
-        elif line[:1] in ("d", "i", "+", "-", "n", "B", "\\") and \
-                (line.startswith("diff ") or line.startswith("index ")
-                 or line.startswith("--- ") or line.startswith("+++ ")
-                 or line.startswith("new ") or line.startswith("deleted ")
-                 or line.startswith("Binary ")):
-            in_hunk = False
-        elif in_hunk and line.startswith("+"):
-            added.append(line[1:])
-    return sorted(paths), "\n".join(added), has_binary
+    # Added content, driven by the hunk header's own counts. With --unified=0 a
+    # hunk is exactly `removed` '-' lines then `added` '+' lines (plus optional
+    # "\ No newline" markers). Consuming by count — not by matching '+'/'@@' on
+    # a line, which attacker *content* could imitate once git prefixes it — is
+    # immune to both the '++ '→'+++ ' header-spoof and any in-line separator.
+    added = []
+    lines = git(wt, "diff", "--unified=0", base).stdout.split("\n")
+    i, n = 0, len(lines)
+    while i < n:
+        m = HUNK_HEADER.match(lines[i])
+        if not m:
+            i += 1
+            continue
+        removed = int(m.group(1)) if m.group(1) is not None else 1
+        addn = int(m.group(2)) if m.group(2) is not None else 1
+        i += 1
+        seen = 0
+        while i < n and seen < removed:              # skip removed lines
+            if not lines[i].startswith("\\"):
+                seen += 1
+            i += 1
+        took = 0
+        while i < n and took < addn:                 # take added lines
+            if lines[i].startswith("\\"):            # "\ No newline" marker
+                i += 1
+                continue
+            added.append(lines[i][1:] if lines[i].startswith("+") else lines[i])
+            i += 1
+            took += 1
+    return sorted(paths), "\n".join(added), has_binary, nonregular
+
+
+def diff_fingerprint(target):
+    """A stable hash of a target's whole change (modes + patch) vs its base, so
+    apply can prove it is merging exactly the tree that gate approved and the
+    operator reviewed — closing the review→apply TOCTOU (§7 req 12)."""
+    wt, base = target["worktree"], target["base"]
+    git(wt, "add", "-N", "-A")
+    raw = git(wt, "diff", "--raw", base).stdout
+    patch = git(wt, "diff", base).stdout
+    return hashlib.sha256((raw + "\0" + patch).encode("utf-8")).hexdigest()
 
 
 def check_target_diff(target, denylist, use_gitleaks):
     """Run the deterministic gates on a target's change. Returns (paths, errors)."""
     hub = target["hub"]
-    paths, added, has_binary = worktree_change(target)
+    paths, added, has_binary, nonregular = worktree_change(target)
     errors = []
     for f in paths:
         if hub:
@@ -540,6 +595,11 @@ def check_target_diff(target, denylist, use_gitleaks):
                 errors.append("changed a non-prose/out-of-ai path: %s" % f)
         elif EXEC_CONFIG.search(f):
             errors.append("changed an executable/config file: %s" % f)
+    # Applies to every target: a symlink/gitlink/exec-bit file is never prose,
+    # in the hub or a suggest-to-repo repo (req 9).
+    for path, mode in nonregular:
+        errors.append("not a regular file (mode %s) — symlinks, gitlinks and"
+                      " the exec bit are refused (req 9): %s" % (mode, path))
     if hub and has_binary:
         errors.append("a binary file is among the changes — prose only (req 9)")
     if EXEC_CONTENT.search(added):
@@ -754,6 +814,7 @@ def gate(run_dir, name=None):
     use_gitleaks = gitleaks_available()
     names = [name] if name else sorted(targets["targets"])
     all_ok = True
+    dirty = False
     for nm in names:
         t = targets["targets"].get(nm)
         if not t:
@@ -762,12 +823,20 @@ def gate(run_dir, name=None):
         files, errors = check_target_diff(t, denylist, use_gitleaks)
         if errors:
             all_ok = False
+            t.pop("gated", None)      # a failing gate revokes any earlier pass
+            dirty = True
             sys.stderr.write("✗ %s: %d gate violation(s):\n" % (nm, len(errors)))
             for e in errors:
                 sys.stderr.write("  ✗ %s\n" % e)
         else:
+            # Pin exactly what was gated so apply can prove it merges the
+            # reviewed tree and nothing was swapped in afterward (§7 req 12).
+            t["gated"] = diff_fingerprint(t)
+            dirty = True
             print("→ %s: gate clean — %d file(s) changed in %s"
                   % (nm, len(files), t["worktree"]))
+    if dirty:
+        save_targets(run_dir, targets)
     if not all_ok:
         sys.exit(1)
     print("→ review the diff, then: ai-distill apply %s" % run_dir)
@@ -776,8 +845,7 @@ def gate(run_dir, name=None):
 # ── apply / discard: merge a reviewed branch into the live tree, or drop it ─
 
 def _has_changes(target):
-    paths, _, _ = worktree_change(target)
-    return bool(paths)
+    return bool(worktree_change(target)[0])
 
 
 def apply(run_dir, name=None):
@@ -803,6 +871,13 @@ def apply(run_dir, name=None):
                              % (nm, len(errors)))
             for e in errors:
                 sys.stderr.write("  ✗ %s\n" % e)
+            sys.exit(1)
+        # Merge exactly the tree that was gated and reviewed — never whatever
+        # the worktree drifted to after review (§7 req 12, review→apply TOCTOU).
+        if t.get("gated") != diff_fingerprint(t):
+            sys.stderr.write("✗ %s: the worktree changed since it was gated —"
+                             " re-run 'ai-distill gate %s', review the refreshed"
+                             " diff, then apply\n" % (nm, run_dir))
             sys.exit(1)
         repo, wt, branch, base = (t["repo"], t["worktree"], t["branch"],
                                   t["base"])

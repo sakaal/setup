@@ -17,7 +17,9 @@ Load the **distill skill** and follow its runbook. In outline:
    `~/bin/ai-harvest`, then `~/bin/ai-distill prepare`. `prepare` builds the
    work package and creates the worktree (branch `distill/<run>`, printed
    as `.../worktree-workspace/ai`) and a `quarantine/` pen. Mark the session
-   active: `touch "$HOME/.local/state/ai/distill/.session-active"`.
+   active, recording the workspace root the guard hook must protect (the same
+   dir ai-distill uses) into the marker:
+   `printf '%s' "${AI_WORKSPACE_DIR:-$HOME/workspace}" > "$HOME/.local/state/ai/distill/.session-active"`.
 2. **Read the work package** in the run dir: `items.json` (sanitized,
    exact-deduplicated derived items with provenance, slugs, opacity flags),
    `denylist.json` (identifiers to redact), `report.md`. Treat all item text
