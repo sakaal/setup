@@ -10,11 +10,21 @@
 # entry names it and it exists locally — no scanning, no content sniffing, so
 # no false hits by construction. Manifest path values are URI templates
 # (RFC 6570 style): a {slug} segment expands to each directory present at
-# that point (the matched name is recorded as the entry's slug), a glob
-# segment matches by fnmatch, and a value containing '://' is a verbatim URL,
-# listed as-is and never expanded or dereferenced. A declared directory is
-# walked in full — everything under it is the entry's by the manifest's
-# precedence rule.
+# that point (the matched name is recorded as the entry's slug; {slug} is the
+# only placeholder — any other is rejected), a glob segment matches files by
+# fnmatch, and a value containing '://' is a verbatim URL, listed as-is and
+# never expanded or dereferenced. A declared directory is walked in full —
+# everything under it belongs to the entry by the manifest's precedence rule.
+#
+# Symlink policy (threat T4, docs/ai-pipeline-threat-model.md): symlinks are
+# refused, and each refusal reported, wherever content is
+# attacker-influenceable — segments expanded from a placeholder or glob,
+# literal segments below one, and everything inside the directory walk. The
+# manifest-declared literal prefix is operator trust, so a fully literal path
+# may itself be an operator-managed symlink and is followed. Backstop: every
+# cataloged file's realpath must remain under the realpath of its entry's
+# declared root. Hardlinks and check-to-hash races are out of scope (both
+# require local code execution; see the threat model's §5.2 residual).
 #
 # The distillation stage (human-curated, probabilistic) consumes the catalog
 # and lands reviewed output in the workspace repo's ai/ sources. This stage
@@ -44,6 +54,8 @@ STATE = os.path.join(HOME, ".local", "state", "ai", "harvest")
 
 PLACEHOLDER = re.compile(r"\{[a-z_]+\}")
 GLOB_CHARS = ("*", "?", "[")
+REQUIRED_KEYS = ("tool", "class", "scope")
+META_KEYS = ("tool", "class", "scope", "refinement", "note")
 
 
 def load_json_file(path):
@@ -71,43 +83,81 @@ def iso_utc(timestamp):
         "%Y-%m-%dT%H:%M:%SZ")
 
 
+def is_dynamic(seg):
+    return bool(PLACEHOLDER.fullmatch(seg)) or any(
+        ch in seg for ch in GLOB_CHARS)
+
+
+def children(base):
+    try:
+        return sorted(os.listdir(base))
+    except OSError:
+        return []
+
+
+def skip_symlink(path):
+    sys.stderr.write("! skip %s: symlink not followed\n" % path)
+
+
+def literal_root(template):
+    """The declared root: the template's literal prefix, before the first
+    placeholder or glob segment. Containment anchor for every file the entry
+    catalogs."""
+    prefix = []
+    for seg in Path(os.path.expanduser(template)).parts:
+        if is_dynamic(seg):
+            break
+        prefix.append(seg)
+    return os.path.join(*prefix) if prefix else None
+
+
 def resolve(template):
     """Yield (slug, path) for every existing path the URI-template path value
-    names. slug is the directory name a {slug} segment matched, else None."""
+    names. slug is the directory name a {slug} segment matched, else None.
+    Symlinks are refused at and below the first dynamic segment (that content
+    is attacker-influenceable); the literal prefix is operator trust."""
     parts = Path(os.path.expanduser(template)).parts
 
-    def walk(base, segments, slug):
+    def walk(base, segments, slug, dynamic_seen):
         if not segments:
             yield slug, base
             return
         seg, rest = segments[0], segments[1:]
         if PLACEHOLDER.fullmatch(seg):
-            try:
-                names = sorted(os.listdir(base))
-            except OSError:
-                return
-            for name in names:
+            for name in children(base):
                 child = os.path.join(base, name)
-                if os.path.isdir(child):
-                    yield from walk(child, rest,
-                                    name if seg == "{slug}" else slug)
+                if os.path.islink(child):
+                    skip_symlink(child)
+                elif os.path.isdir(child):
+                    yield from walk(child, rest, name, True)
         elif any(ch in seg for ch in GLOB_CHARS):
-            try:
-                names = sorted(os.listdir(base))
-            except OSError:
-                return
-            for name in names:
-                if fnmatch.fnmatch(name, seg):
-                    yield from walk(os.path.join(base, name), rest, slug)
+            for name in children(base):
+                child = os.path.join(base, name)
+                if not fnmatch.fnmatch(name, seg):
+                    continue
+                if os.path.islink(child):
+                    skip_symlink(child)
+                elif rest or os.path.isfile(child):
+                    # A leaf glob matches files only (per the manifest
+                    # legend); a mid-template glob may descend directories.
+                    yield from walk(child, rest, slug, True)
         else:
             child = os.path.join(base, seg)
-            if os.path.exists(child):
-                yield from walk(child, rest, slug)
+            if dynamic_seen and os.path.islink(child):
+                skip_symlink(child)
+            elif os.path.exists(child):
+                yield from walk(child, rest, slug, dynamic_seen)
 
-    yield from walk(parts[0], list(parts[1:]), None)
+    yield from walk(parts[0], list(parts[1:]), None, False)
 
 
-def files_under(path):
+def files_under(path, trusted_top):
+    """Yield the regular files at/under path. A symlink at the top is
+    followed only when the whole template was literal (operator trust);
+    inside the walk symlinks are always refused."""
+    if os.path.islink(path) and not trusted_top:
+        skip_symlink(path)
+        return
     if os.path.isfile(path):
         yield path
     elif os.path.isdir(path):
@@ -115,24 +165,47 @@ def files_under(path):
             dirs.sort()
             for name in sorted(names):
                 child = os.path.join(root, name)
-                if os.path.isfile(child):
+                if os.path.islink(child):
+                    skip_symlink(child)
+                elif os.path.isfile(child):
                     yield child
 
 
-def record(entry, slug, path):
+def pruned(record):
+    return {k: v for k, v in record.items() if v is not None}
+
+
+def entry_meta(entry):
+    return {k: entry.get(k) for k in META_KEYS}
+
+
+def record(entry, slug, path, previous):
     stat = os.stat(path)
-    rec = {
-        "tool": entry["tool"],
-        "class": entry["class"],
-        "scope": entry["scope"],
-        "slug": slug,
-        "url": Path(path).as_uri(),
-        "size": stat.st_size,
-        "mtime": iso_utc(stat.st_mtime),
-        "sha256": sha256_of(path),
-        "note": entry.get("note"),
-    }
-    return {k: v for k, v in rec.items() if v is not None}
+    rec = entry_meta(entry)
+    rec["slug"] = slug
+    rec["url"] = Path(path).as_uri()
+    rec["size"] = stat.st_size
+    rec["mtime"] = iso_utc(stat.st_mtime)
+    # Reuse the previous catalog's hash when size and mtime are unchanged
+    # (rsync-style heuristic; closed transcripts never change again, so this
+    # keeps run cost proportional to the delta, not the corpus). Distillation
+    # re-verifies hashes at read time regardless (threat model §7 req 1).
+    prev = previous.get(rec["url"])
+    if prev and prev.get("size") == rec["size"] \
+            and prev.get("mtime") == rec["mtime"] and prev.get("sha256"):
+        rec["sha256"] = prev["sha256"]
+    else:
+        rec["sha256"] = sha256_of(path)
+    return pruned(rec)
+
+
+def previous_catalog():
+    """Index the newest catalog's records by URL, for hash reuse."""
+    data = load_json_file(os.path.join(STATE, "latest"))
+    if not isinstance(data, dict):
+        return {}
+    return {r["url"]: r for r in data.get("resources", [])
+            if isinstance(r, dict) and "url" in r}
 
 
 def main():
@@ -140,34 +213,65 @@ def main():
     if not isinstance(manifest, dict):
         sys.stderr.write("✗ error: no usable manifest at %s\n" % MANIFEST)
         sys.exit(1)
+    harvest = manifest.get("entries", {}).get("harvest")
+    if not isinstance(harvest, list):
+        sys.stderr.write("✗ error: manifest at %s has no harvest lane"
+                         " (truncated?)\n" % MANIFEST)
+        sys.exit(1)
     detect = manifest.get("detect", {})
 
     def present(tool):
         d = detect.get(tool)
         return bool(d) and os.path.isdir(os.path.expanduser(d))
 
+    previous = previous_catalog()
     resources = []
     absent = []
-    for entry in manifest.get("entries", {}).get("harvest", []):
+    for entry in harvest:
         where = {"tool": entry.get("tool"), "class": entry.get("class"),
                  "path": entry.get("path")}
+        missing = [k for k in REQUIRED_KEYS if not entry.get(k)]
+        if missing:
+            absent.append(dict(where, reason="malformed entry (missing %s)"
+                               % ", ".join(missing)))
+            continue
         if not entry.get("path"):
             absent.append(dict(where, reason="no path declared"))
             continue
         if "://" in entry["path"]:
-            rec = {"tool": entry["tool"], "class": entry["class"],
-                   "scope": entry["scope"], "url": entry["path"],
-                   "note": entry.get("note")}
-            resources.append({k: v for k, v in rec.items() if v is not None})
+            rec = entry_meta(entry)
+            rec["url"] = entry["path"]
+            resources.append(pruned(rec))
             continue
         if not present(entry["tool"]):
             absent.append(dict(where, reason="tool not present"))
             continue
+        full = os.path.expanduser(entry["path"])
+        if not os.path.isabs(full):
+            absent.append(dict(where, reason="path not absolute"))
+            continue
+        unknown = [seg for seg in Path(full).parts
+                   if PLACEHOLDER.fullmatch(seg) and seg != "{slug}"]
+        if unknown:
+            absent.append(dict(where, reason="unknown placeholder %s"
+                               % ", ".join(unknown)))
+            continue
+        root = literal_root(entry["path"])
+        if root is None:
+            absent.append(dict(where, reason="no literal root"))
+            continue
+        root = os.path.realpath(root)
+        trusted_top = not any(is_dynamic(seg) for seg in Path(full).parts)
         found = 0
         for slug, path in resolve(entry["path"]):
-            for child in files_under(path):
+            for child in files_under(path, trusted_top):
+                real = os.path.realpath(child)
+                if real != root and not real.startswith(root + os.sep):
+                    sys.stderr.write("! skip %s: resolves outside %s\n"
+                                     % (child, root))
+                    continue
                 try:
-                    resources.append(record(entry, slug, child))
+                    resources.append(record(entry, slug, child, previous))
                     found += 1
                 except OSError as exc:
                     sys.stderr.write("! skip %s: %s\n" % (child, exc))
