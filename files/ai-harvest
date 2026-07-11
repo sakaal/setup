@@ -15,6 +15,10 @@
 # fnmatch, and a value containing '://' is a verbatim URL, listed as-is and
 # never expanded or dereferenced. A declared directory is walked in full —
 # everything under it belongs to the entry by the manifest's precedence rule.
+# When several entries match one file, the most-specific (longest path) wins
+# and classifies it once — e.g. a MEMORY.md entry marked refinement:meta
+# overrides the memory-dir entry it sits under, so an index is cataloged as
+# meta (never distilled) while the memories beside it stay derived.
 #
 # Symlink policy (threat T4, docs/ai-pipeline-threat-model.md): symlinks are
 # refused, and each refusal reported, wherever content is
@@ -26,10 +30,10 @@
 # declared root. Hardlinks and check-to-hash races are out of scope (both
 # require local code execution; see the threat model's §5.2 residual).
 #
-# The distillation stage (human-curated, probabilistic) consumes the catalog
-# and lands reviewed output in the workspace repo's ai/ sources. This stage
-# reads content only to hash it — nothing is executed, rendered, or fetched,
-# and nothing is ever written to a cataloged path.
+# The distillation stage (hybrid, human-gated; ai-distill) consumes the
+# catalog and lands reviewed output in the workspace repo's ai/ sources.
+# Collection reads content only to hash it — nothing is executed, rendered,
+# or fetched, and nothing is ever written to a cataloged path.
 # Uses only the standard library (works on the system python3, 3.9+).
 
 import fnmatch
@@ -97,6 +101,20 @@ def children(base):
 
 def skip_symlink(path):
     sys.stderr.write("! skip %s: symlink not followed\n" % path)
+
+
+def entry_specificity(entry):
+    """How specific a harvest entry's path is, as (segments, literal segments).
+    A deeper path outscores a shallower one it contains; at equal depth a
+    literal segment outscores a glob/placeholder (which matches a set), so a
+    concrete filename always wins over a same-depth pattern regardless of
+    manifest order. Verbatim URLs score lowest; they never overlap file paths."""
+    path = entry.get("path") or ""
+    if "://" in path:
+        return (0, 0)
+    parts = Path(os.path.expanduser(path)).parts
+    literals = sum(1 for seg in parts if not is_dynamic(seg))
+    return (len(parts), literals)
 
 
 def literal_root(template):
@@ -186,10 +204,13 @@ def record(entry, slug, path, previous):
     rec["url"] = Path(path).as_uri()
     rec["size"] = stat.st_size
     rec["mtime"] = iso_utc(stat.st_mtime)
-    # Reuse the previous catalog's hash when size and mtime are unchanged
-    # (rsync-style heuristic; closed transcripts never change again, so this
-    # keeps run cost proportional to the delta, not the corpus). Distillation
-    # re-verifies hashes at read time regardless (threat model §7 req 1).
+    # Reuse the previous catalog's hash when size and whole-second mtime are
+    # unchanged (rsync-style heuristic; keeps run cost proportional to the
+    # delta, not the corpus). The reused hash is therefore ADVISORY — a
+    # same-second, size-preserving in-place edit could leave it stale.
+    # Distillation re-verifies every hash at read time and excludes mismatches
+    # (threat model §7 req 1 / R2), so the catalog is authoritative only after
+    # that re-verification, never on the reused value alone.
     prev = previous.get(rec["url"])
     if prev and prev.get("size") == rec["size"] \
             and prev.get("mtime") == rec["mtime"] and prev.get("sha256"):
@@ -227,6 +248,13 @@ def main():
     previous = previous_catalog()
     resources = []
     absent = []
+    claimed = set()
+    # Most-specific entry wins: a file matched by several harvest entries is
+    # classified by the one with the longest path (e.g. a specific MEMORY.md
+    # entry overrides the memory-dir entry it sits under). This realizes the
+    # coverage precedence the manifest states, now within the harvest lane.
+    # Stable sort → equal-specificity entries keep manifest order.
+    harvest = sorted(harvest, key=entry_specificity, reverse=True)
     for entry in harvest:
         where = {"tool": entry.get("tool"), "class": entry.get("class"),
                  "path": entry.get("path")}
@@ -250,8 +278,11 @@ def main():
         if not os.path.isabs(full):
             absent.append(dict(where, reason="path not absolute"))
             continue
+        # Any brace-bearing segment that is not exactly {slug} is a malformed
+        # placeholder (a typo like {Slug}/{slug1} or {foo}) — rejected loudly
+        # rather than treated as a literal dir that silently matches nothing.
         unknown = [seg for seg in Path(full).parts
-                   if PLACEHOLDER.fullmatch(seg) and seg != "{slug}"]
+                   if ("{" in seg or "}" in seg) and seg != "{slug}"]
         if unknown:
             absent.append(dict(where, reason="unknown placeholder %s"
                                % ", ".join(unknown)))
@@ -262,20 +293,32 @@ def main():
             continue
         root = os.path.realpath(root)
         trusted_top = not any(is_dynamic(seg) for seg in Path(full).parts)
-        found = 0
+        matched = 0
+        recorded = 0
         for slug, path in resolve(entry["path"]):
             for child in files_under(path, trusted_top):
                 real = os.path.realpath(child)
-                if real != root and not real.startswith(root + os.sep):
+                try:
+                    contained = os.path.commonpath([real, root]) == root
+                except ValueError:
+                    contained = False
+                if not contained:
                     sys.stderr.write("! skip %s: resolves outside %s\n"
                                      % (child, root))
                     continue
+                matched += 1
+                url = Path(child).as_uri()
+                if url in claimed:
+                    continue  # a more-specific entry already classified it
                 try:
                     resources.append(record(entry, slug, child, previous))
-                    found += 1
+                    claimed.add(url)
+                    recorded += 1
                 except OSError as exc:
                     sys.stderr.write("! skip %s: %s\n" % (child, exc))
-        if not found:
+        # Absent only when nothing on disk matched at all — not when every
+        # match was legitimately claimed by a more-specific entry.
+        if matched == 0:
             absent.append(dict(where, reason="no matching files"))
 
     now = datetime.now(timezone.utc)

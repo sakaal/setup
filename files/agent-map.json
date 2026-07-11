@@ -25,13 +25,14 @@
   },
   "refinement": {
     "raw": "verbatim record of what happened; citable evidence, highest injection exposure",
-    "derived": "already distilled once by the tool itself; compact claims, provenance lost, injection possibly laundered — corroborated against raw when risk warrants"
+    "derived": "already distilled once by the tool itself; compact claims, provenance lost, injection possibly laundered — corroborated against raw when risk warrants",
+    "meta": "tool bookkeeping ABOUT the knowledge, not the knowledge itself (indexes, navigation, manifests); never distilled — whatever it points to is harvested on its own. Marked on a specific path that a broader entry would otherwise class as raw/derived; the more-specific entry wins (see coverage precedence)."
   },
   "placeholders": {
     "{slug}": "in a path value, a slug of the working-directory path the tool ran in (e.g. C--Users-you-projects-foo) — may refer to a repo, the home dir, or a remote session, not necessarily a repo name. Path values are URI templates (RFC 6570 style): ai-harvest expands a placeholder segment to each directory present at that point and records the matched name; a value containing '://' is a verbatim URL, never expanded."
   },
 
-  "coverage": "Exhaustive and explicit: every store an enrolled tool keeps locally is listed under its lane in `entries` — including non-reusable data, named in the non-reusable section, never left to a default. Precedence, stated once: distribute and harvest entries win over the non-reusable wildcards, so a non-reusable `<dir>/**` means everything under that dir except what distribute/harvest already claim. Hence a tool's non-reusable remainder is a single bare wildcard, not a file list; call out an individual path only when it needs a flag (e.g. a secret). Entries are grouped by lane (not tagged per-entry) so the lane is structural. Only distribute entries carry a 'sync' mechanism; harvest and non-reusable are never machine-applied, so they omit it. A distribute 'sync':'ignore' is reusable content with no working hook here — the tool offers no file, or its emitter isn't built yet (see the entry's note).",
+  "coverage": "Exhaustive and explicit: every store an enrolled tool keeps locally is listed under its lane in `entries` — including non-reusable data, named in the non-reusable section, never left to a default. Precedence, stated once: the most-specific entry wins. Across lanes, distribute and harvest entries win over the non-reusable wildcards, so a non-reusable `<dir>/**` means everything under that dir except what distribute/harvest already claim; within a lane, a longer path wins over a shorter one covering it (a specific `<dir>/MEMORY.md` overrides the `<dir>` entry, so the index is classed `meta` while its neighbours stay `derived`). Hence a tool's non-reusable remainder is a single bare wildcard, not a file list; call out an individual path only when it needs a flag (e.g. a secret). Entries are grouped by lane (not tagged per-entry) so the lane is structural. Only distribute entries carry a 'sync' mechanism; harvest and non-reusable are never machine-applied, so they omit it. A distribute 'sync':'ignore' is reusable content with no working hook here — the tool offers no file, or its emitter isn't built yet (see the entry's note).",
 
   "hub": {
     "dir": "~/.config/ai",
@@ -82,17 +83,19 @@
       {"tool": "cursor", "scope": "repo", "class": "instructions", "path": "AGENTS.md", "sync": "link", "source": "AGENTS.md", "note": "Cursor reads AGENTS.md natively."},
       {"tool": "cursor", "scope": "repo", "class": "mcp", "path": ".cursor/mcp.json", "sync": "generate", "source": "mcp.json", "format": "mcp-json", "key": "mcpServers"},
       {"tool": "cursor", "scope": "repo", "class": "commands", "path": ".cursor/commands", "sync": "link", "source": "commands"},
-      {"tool": "cursor", "scope": "repo:pattern", "class": "rules", "path": ".cursor/rules", "sync": "ignore", "note": "Glob-scoped ('globs:'); needs a wrap emitter."},
+      {"tool": "cursor", "scope": "repo:pattern", "class": "rules", "path": ".cursor/rules", "sync": "ignore", "note": "Glob-scoped ('globs:'); reference the shared rules in place where the format matches (symlink), else a wrap emitter renders them into the tool's format."},
 
       {"tool": "github-copilot", "scope": "repo", "class": "instructions", "path": ".github/copilot-instructions.md", "sync": "import", "source": "AGENTS.md"},
       {"tool": "github-copilot", "scope": "repo", "class": "commands", "path": ".github/prompts", "sync": "link", "source": "commands", "note": "Prompt files (*.prompt.md)."},
       {"tool": "github-copilot", "scope": "repo", "class": "agents", "path": ".github/chatmodes", "sync": "link", "source": "agents", "note": "Custom chat modes (*.chatmode.md) — Copilot's agent equivalent."},
-      {"tool": "github-copilot", "scope": "repo:pattern", "class": "rules", "path": ".github/instructions", "sync": "ignore", "note": "Glob-scoped ('applyTo:'); needs a wrap emitter."}
+      {"tool": "github-copilot", "scope": "repo:pattern", "class": "rules", "path": ".github/instructions", "sync": "ignore", "note": "Glob-scoped ('applyTo:'); reference the shared rules in place where the format matches (symlink), else a wrap emitter renders them into the tool's format."}
     ],
 
     "harvest": [
       {"tool": "claude-code", "scope": "user:path", "class": "memory", "refinement": "derived", "path": "~/.claude/projects/{slug}/memory", "note": "Auto-memory keyed by working dir ({slug}), stored under home not the repo. Distil into AGENTS.md by hand; do not push."},
+      {"tool": "claude-code", "scope": "user:path", "class": "memory", "refinement": "meta", "path": "~/.claude/projects/{slug}/memory/MEMORY.md", "note": "Per-project memory index (the tool's table of contents). More specific than the memory dir above, so it wins: classed meta, not distilled — the memories it lists are harvested individually."},
       {"tool": "claude-code", "scope": "user", "class": "memory-global", "refinement": "derived", "path": "~/.claude/memory", "note": "Cross-repo memory; same harvest treatment."},
+      {"tool": "claude-code", "scope": "user", "class": "memory-global", "refinement": "meta", "path": "~/.claude/memory/MEMORY.md", "note": "Cross-repo memory index; same meta treatment as the per-project index."},
       {"tool": "claude-code", "scope": "user", "class": "history", "refinement": "raw", "path": "~/.claude/history.jsonl", "note": "Prompt/command history; mostly operator-typed, raw upstream of memory. Mine and distil, never push."},
       {"tool": "claude-code", "scope": "user:path", "class": "transcripts", "refinement": "raw", "path": "~/.claude/projects/{slug}/*.jsonl", "note": "Session transcript .jsonl files (sibling to the memory/ dir); richest harvest source."}
     ],

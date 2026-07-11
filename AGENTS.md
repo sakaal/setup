@@ -149,6 +149,16 @@ are wired to the hub.
 `~/bin/ai-sync` (stdlib `json`) read this lane, matching scope by its base
 (`user`), and loop generically — no tool is enumerated in code.
 
+*Reference in place, don't copy.* The default is to point a tool at the
+shared source where it already lives — a symlink (`link`) to the hub at user
+scope, or, for repo-scope rules that ship inside a deployed working copy, the
+tool's own config pointed at that in-tree path. The copy/transform methods
+(`import`/`generate`/`wrap`) are the exception, only for tools that cannot
+read the shared file natively (e.g. a glob-scoped `rules` format a tool won't
+load by reference). Repo-scope entries are applied inside the working repo,
+not by the user-global sync (stage 09 wires user scope only); the manifest
+records their per-repo locations and method.
+
 **harvest.** These entries locate the knowledge a curation run distils
 upward. `~/bin/ai-harvest` (deployed by stage 09, run manually at curation
 time) resolves them deterministically — a `{slug}` segment expands to the
@@ -161,13 +171,23 @@ reads content only to hash it and never writes to tool paths.
 **non-reusable.** A decision record; neither this lane nor harvest is ever
 machine-applied.
 
-**Distillation** (human-curated, probabilistic) consumes the catalog and
-lands reviewed output in the workspace repo's `ai/` sources — nothing flows
-from harvest into distribution without review. Three principles:
+**Distillation** (hybrid — deterministic `ai-distill prepare`/`accept`
+scripts bracketing a human-supervised agent session for the inference
+middle; no model API calls or credentials in the pipeline) consumes
+the catalog and lands reviewed output in the workspace repo's `ai/` sources —
+nothing flows from harvest into distribution without review. It runs
+sanitize → generalize → categorize → deduplicate → triage, then stages an
+itemized proposal for human review. The session half ships as the `distill`
+plugin (this repo is its own Claude Code plugin marketplace — see
+`.claude-plugin/marketplace.json` and `plugins/distill/`); the plugin is
+tool-specific packaging around agent-neutral process content, the same way
+`ai-sync` has per-tool emitters. Three principles:
 
 - **Derived-first.** The default input is the knowledge the tools already
   distilled once (`refinement: derived` — memories, not transcripts); the
-  mission is to collect that knowledge safely, not to re-derive it.
+  mission is to collect that knowledge safely, not to re-derive it. Tool
+  bookkeeping (`refinement: meta`, e.g. a memory index) is cataloged but
+  never distilled — what it points to is harvested on its own.
 - **Tiered screening.** Clearly safe items pass through; risky ones get
   deeper analysis, escalating if necessary to targeted corroboration against
   the raw sources — so raw content stays cataloged as a reference index,

@@ -89,10 +89,29 @@ for token in ("SECRET", "evil", "notes.txt", "outside"):
 refinement_by_class = {"memory": "derived", "memory-global": "derived",
                        "history": "raw", "transcripts": "raw"}
 for r in catalog["resources"]:
-    expected = refinement_by_class.get(r["class"])
+    # MEMORY.md is the index — a more-specific entry classes it meta, overriding
+    # the memory-dir entry that would otherwise make it derived.
+    expected = "meta" if r["url"].endswith("/MEMORY.md") else \
+        refinement_by_class.get(r["class"])
     if r.get("refinement") != expected:
         failures.append("%s: refinement %r, expected %r"
                         % (r["url"], r.get("refinement"), expected))
+
+# Precedence: the index is cataloged exactly once (not by both entries) and as meta.
+mem_index = [r for r in catalog["resources"] if r["url"].endswith("/MEMORY.md")]
+if len(mem_index) != 1:
+    failures.append("MEMORY.md cataloged %d times, expected 1 (precedence)" % len(mem_index))
+elif mem_index[0].get("refinement") != "meta":
+    failures.append("MEMORY.md not classed meta")
+
+# matched-vs-found: the memory-dir entry whose only file (MEMORY.md) was claimed
+# by the more-specific meta entry must NOT be falsely 'no matching files'.
+false_absent = [a for a in catalog["absent"]
+                if a.get("path", "").endswith("/{slug}/memory")
+                and "no matching files" in a.get("reason", "")]
+if false_absent:
+    failures.append("memory dir falsely absent though its index was cataloged: %r"
+                    % false_absent)
 
 if failures:
     for f in failures:

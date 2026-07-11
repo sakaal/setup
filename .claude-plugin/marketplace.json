@@ -1,0 +1,17 @@
+{
+  "name": "setup",
+  "owner": {
+    "name": "Sakari Maaranen",
+    "email": "sam@iki.fi"
+  },
+  "description": "Agent plugins shipped with the setup repo — mechanism only, no personal content.",
+  "version": "1.0.0",
+  "plugins": [
+    {
+      "name": "distill",
+      "source": "./plugins/distill",
+      "description": "Human-supervised distillation of harvested AI-tool knowledge into the shared instruction sources. Deterministic prepare/accept scripts bracket a skills-guided inference middle; every run is staged and human-gated. Process and controls: docs/ai-pipeline-threat-model.md §7.",
+      "version": "0.1.0"
+    }
+  ]
+}

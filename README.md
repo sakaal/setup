@@ -16,6 +16,11 @@ anything.
 Your agent brief stays private: the instructions and server list live in
 your own repo, not in public dotfiles — this repo ships only the mechanism.
 
+It also closes the loop: a harvest-and-distill workflow turns what your
+agents *learn* — the memories and notes they accumulate as you work — back
+into that shared brief, as reusable, generalized instructions. See
+[Distilling learned knowledge](#distilling-learned-knowledge) below.
+
 ## Quick start
 
 Prerequisite: install the Proton Pass desktop app and sign in.
@@ -71,7 +76,7 @@ SETUP_DIR=~/workspace/setup /bin/bash -c "$(curl -fsSL https://raw.githubusercon
 Multiple environment variables combine space-separated on the same line:
 
 ```sh
-SETUP_DIR=~/workspace/setup SETUP_REF=v2.0.0 /bin/bash -c "$(curl -fsSL https://raw.githubusercontent.com/sakaal/setup/master/setup.sh)"
+SETUP_DIR=~/workspace/setup SETUP_REF=v2.1.0 /bin/bash -c "$(curl -fsSL https://raw.githubusercontent.com/sakaal/setup/master/setup.sh)"
 ```
 
 ### Pinning to a release tag
@@ -81,7 +86,7 @@ and re-executes from the clone, so everything past the initial
 bootstrap runs the pinned version:
 
 ```sh
-SETUP_REF=v2.0.0 /bin/bash -c "$(curl -fsSL https://raw.githubusercontent.com/sakaal/setup/master/setup.sh)"
+SETUP_REF=v2.1.0 /bin/bash -c "$(curl -fsSL https://raw.githubusercontent.com/sakaal/setup/master/setup.sh)"
 ```
 
 The ref in the URL (`master` above) selects only the entry script
@@ -90,7 +95,7 @@ alone still installs `master`. For an end-to-end pin, including the
 entry script, set both to the same tag:
 
 ```sh
-SETUP_REF=v2.0.0 /bin/bash -c "$(curl -fsSL https://raw.githubusercontent.com/sakaal/setup/v2.0.0/setup.sh)"
+SETUP_REF=v2.1.0 /bin/bash -c "$(curl -fsSL https://raw.githubusercontent.com/sakaal/setup/v2.1.0/setup.sh)"
 ```
 
 Tags are immutable refs. When a release is GPG-signed, you can
@@ -134,10 +139,87 @@ find) its own clone, and is ignored when you run from a working copy.
    loop generically, so adding a tool is a manifest edit, not code. Present
    tools are pointed at the hub via symlink/`@import` stub, and `ai-sync`
    renders the MCP list into each tool's own format — add-only, never
-   overwriting existing entries. A companion `~/bin/ai-harvest` (deployed,
-   never run by the bootstrap) catalogs each tool's accumulated knowledge —
-   memory, session transcripts — for later human-curated distillation back
-   into the shared sources.
+   overwriting existing entries. Companions `~/bin/ai-harvest` and
+   `~/bin/ai-distill` (deployed, never run by the bootstrap) support the
+   learning loop — cataloging each tool's accumulated knowledge and distilling
+   it back into the shared sources under human review. See
+   [Distilling learned knowledge](#distilling-learned-knowledge).
+
+## Distilling learned knowledge
+
+As you work, your AI tools accumulate knowledge — memories, notes, session
+transcripts. Most of it is specific to one project, but some is generalizable
+craft ("prefer retry-with-backoff behind gateway APIs", "state a requirement's
+standing justification") that would help everywhere. The **distill** workflow
+turns that scattered, project-specific knowledge into a small set of reusable,
+generalized instructions in your shared agent brief — reviewed by you, never
+promoted automatically.
+
+It is a three-part pipeline, all human-gated:
+
+1. **Harvest** — `~/bin/ai-harvest` reads the manifest and catalogs every
+   local store your tools keep (memory, transcripts) as a read-only index of
+   URLs with checksums under `~/.local/state/ai/harvest/`. It reads content
+   only to hash it and writes nothing back.
+2. **Distill** — `~/bin/ai-distill prepare` sanitizes and de-duplicates the
+   harvested memories into a work package; a **human-supervised agent session**
+   (the `distill` plugin) generalizes, categorizes, de-duplicates, and triages
+   them into a proposal; `~/bin/ai-distill accept` validates that proposal
+   (prose only, no secrets, no leaked project identifiers) and stages an
+   itemized `REVIEW.md`.
+3. **Review & apply** — you read the staged proposal and apply the promotions
+   to your workspace repo's `ai/` sources by hand. Nothing reaches `ai/`
+   without your commit.
+
+The scripts are the deterministic guarantees; the plugin is the supervised
+judgment in between. The full design and its threat model are in
+[`docs/ai-pipeline-threat-model.md`](docs/ai-pipeline-threat-model.md).
+
+### It needs the workspace repo's `ai/`
+
+Distillation writes into the **same private workspace repo** that holds your
+shared agent brief — its `ai/` directory (`ai/AGENTS.md`, `ai/rules/…`), the
+sources that `setup` distributes to every tool. That is the whole loop: your
+tools accumulate knowledge → distill lifts the general part into `ai/` →
+`setup` fans `ai/` back out to every tool. So the distill workflow only makes
+sense once `setup` has laid down your workspace repo; promotions have nowhere
+to land without it.
+
+### Installing the `distill` agent
+
+The distillation session ships as a Claude Code plugin, and this repo is its
+marketplace. From a clone of this repo (the `setup` bootstrap leaves one):
+
+```sh
+/plugin marketplace add sakaal/setup
+/plugin install distill@setup
+```
+
+The plugin carries only mechanism — no personal content, no model credentials;
+everything it processes is read from your local machine state at run time. Its
+inference stages are agent-neutral process wrapped in Claude-specific
+packaging (like the per-tool emitters `ai-sync` uses), so the same scripts and
+runbook could back a wrapper for another tool later.
+
+### Using it
+
+Run a distillation whenever your tools have accumulated enough new knowledge to
+be worth curating:
+
+```
+/distill
+```
+
+The session runs harvest → prepare, works through the generalize/categorize/
+deduplicate/triage stages under the runbook, then runs `accept` and shows you
+the staged `REVIEW.md`. Each promotion is flagged with its recurrence (how many
+independent projects it appeared in) as a confidence signal. You review, then
+apply the ones you accept to your workspace repo's `ai/` — a normal edit and
+commit. The next `setup` run (or `ai-sync`) distributes them to every tool.
+
+You can also drive the deterministic halves directly — `ai-harvest`, then
+`ai-distill prepare` / `ai-distill accept` — for inspection or scripting; the
+plugin is only needed for the inference stages in the middle.
 
 ## Repository layout
 
@@ -146,9 +228,15 @@ setup.sh           Entry point — installs prerequisites, hands off to ansible
 setup.yml          Ansible orchestrator — imports tasks/01..09 sequentially
 hosts.yml          Localhost-only inventory
 tasks/             Per-stage task files (01-discover ... 09-ai-config)
-files/             Static files deployed verbatim by stages
+files/             Static files deployed verbatim by stages — includes the
+                   agent-map.json manifest and the ai-sync / ai-harvest /
+                   ai-distill helper scripts
 keys/              Manually-triggered utility scripts (rotate-github-pat,
                    rotate-vault-password, adopt-ssh-keys)
+docs/              Design docs (ai-pipeline-threat-model.md)
+.claude-plugin/    Marketplace manifest — this repo is a Claude Code marketplace
+plugins/distill/   The distill agent plugin (command, skill, agents, hooks)
+tests/             Fixture tests for ai-harvest and ai-distill
 legacy/            Earlier (2018) version of this repo, kept for reference
 ```
 
