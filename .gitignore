@@ -2,3 +2,10 @@
 *.retry
 *~
 .DS_Store
+__pycache__/
+catalog-*.json
+*.jsonl
+MEMORY.md
+memory/
+.claude/
+id_*

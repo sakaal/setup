@@ -171,8 +171,9 @@ def main():
         d = detect.get(tool)
         return bool(d) and os.path.isdir(expand(d))
 
-    # Only the distribute lane is machine-applied; harvest and tool-specific
-    # are data the engines never read.
+    # Only the distribute lane is machine-applied; harvest is cataloged
+    # read-only by ~/bin/ai-harvest, and non-reusable is data no engine
+    # touches.
     acted = False
     for entry in manifest.get("entries", {}).get("distribute", []):
         # Match scope by its base (user vs repo); a :path/:pattern suffix

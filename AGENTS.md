@@ -132,31 +132,52 @@ own directory, use `$SCRIPT_DIR` (resolved early in `setup.sh`).
 ## AI-assistant configuration (realizes 5, 8, 9)
 
 `agent-map.json` is the authoritative, data-driven sync manifest: entries are
-grouped by **lane** (`distribute` / `harvest` / `non-reusable`); each distribute
-entry carries its path, `sync` method (`link`/`import`/`generate`/`wrap`/`ignore`),
-and — where it has a working hook — a `source`/`format`. It also defines the
-`scope`/`subscope` vocabulary (`user`/`repo`, `:path`/`:pattern`) and the
-`{slug}` placeholder convention (path values are RFC 6570-style URI templates);
-that legend is authoritative, so consult it
-rather than duplicating it here. Both the playbook (stage 09, via `include_vars`)
-and `~/bin/ai-sync` (stdlib `json`) read the distribute lane, matching scope by
-its base (`user`), and loop generically — no tool is enumerated in code.
-**harvest** entries locate the knowledge a curation run distils upward.
-`~/bin/ai-harvest` (deployed by stage 09, run manually at curation time)
-resolves them deterministically — a `{slug}` segment expands to the
+grouped by **lane** (`distribute` / `harvest` / `non-reusable`); each
+distribute entry carries its path, `sync` method
+(`link`/`import`/`generate`/`wrap`/`ignore`), and — where it has a working
+hook — a `source`/`format`. The manifest also defines the `scope`/`subscope`
+vocabulary (`user`/`repo`, `:path`/`:pattern`) and the `{slug}` placeholder
+convention (path values are RFC 6570-style URI templates); that legend is
+authoritative, so consult it rather than duplicating it here.
+
+Shared, agent-neutral content (`AGENTS.md`, `mcp.json`, and future
+`commands/`, `skills/`, `agents/`, `rules/`) lives in the private workspace
+repo's `ai/`; `~/.config/ai/` is a stable hub of symlinks to it, and tools
+are wired to the hub.
+
+**distribute.** Both the playbook (stage 09, via `include_vars`) and
+`~/bin/ai-sync` (stdlib `json`) read this lane, matching scope by its base
+(`user`), and loop generically — no tool is enumerated in code.
+
+**harvest.** These entries locate the knowledge a curation run distils
+upward. `~/bin/ai-harvest` (deployed by stage 09, run manually at curation
+time) resolves them deterministically — a `{slug}` segment expands to the
 directories present at that point, a glob segment to matching files, a `://`
 value is a verbatim URL, never expanded or dereferenced — and writes a
 catalog of absolute URLs with size/mtime/sha256 under
 `~/.local/state/ai/harvest/` (`latest` points at the newest run). Collection
-reads content only to hash it and never writes to tool paths; distillation
-(human-curated, probabilistic) consumes the catalog and lands reviewed output
-in the workspace repo's `ai/` sources — nothing flows from harvest into
-distribution without review. **non-reusable** entries are a decision record;
-nothing is machine-applied from either lane.
-Shared, agent-neutral content (`AGENTS.md`, `mcp.json`, and future `commands/`,
-`skills/`, `agents/`, `rules/`) lives in the private
-workspace repo's `ai/`; `~/.config/ai/` is a stable hub of symlinks to it, and
-tools are wired to the hub.
+reads content only to hash it and never writes to tool paths.
+
+**non-reusable.** A decision record; neither this lane nor harvest is ever
+machine-applied.
+
+**Distillation** (human-curated, probabilistic) consumes the catalog and
+lands reviewed output in the workspace repo's `ai/` sources — nothing flows
+from harvest into distribution without review. Three principles:
+
+- **Derived-first.** The default input is the knowledge the tools already
+  distilled once (`refinement: derived` — memories, not transcripts); the
+  mission is to collect that knowledge safely, not to re-derive it.
+- **Tiered screening.** Clearly safe items pass through; risky ones get
+  deeper analysis, escalating if necessary to targeted corroboration against
+  the raw sources — so raw content stays cataloged as a reference index,
+  never bulk-ingested.
+- **Generalizable only.** Project or customer particulars are never promoted
+  — they belong in their source repositories and are routed there
+  (`suggest-to-repo`); promotion to the hub is default-deny, with generality
+  demonstrated by recurrence across repos and identifier-free rewrite.
+
+Threat model and requirements: `docs/ai-pipeline-threat-model.md`.
 
 ## Platform handling (realizes 6)
 

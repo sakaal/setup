@@ -23,6 +23,10 @@
     ":path": "path-specific by location — a particular path or subtree (e.g. user:path)",
     ":pattern": "glob-matched — applies to files matching a pattern (e.g. repo:pattern; Cursor 'globs:', Copilot 'applyTo:')"
   },
+  "refinement": {
+    "raw": "verbatim record of what happened; citable evidence, highest injection exposure",
+    "derived": "already distilled once by the tool itself; compact claims, provenance lost, injection possibly laundered — corroborated against raw when risk warrants"
+  },
   "placeholders": {
     "{slug}": "in a path value, a slug of the working-directory path the tool ran in (e.g. C--Users-you-projects-foo) — may refer to a repo, the home dir, or a remote session, not necessarily a repo name. Path values are URI templates (RFC 6570 style): ai-harvest expands a placeholder segment to each directory present at that point and records the matched name; a value containing '://' is a verbatim URL, never expanded."
   },
@@ -87,10 +91,10 @@
     ],
 
     "harvest": [
-      {"tool": "claude-code", "scope": "user:path", "class": "memory", "path": "~/.claude/projects/{slug}/memory", "note": "Auto-memory keyed by working dir ({slug}), stored under home not the repo. Distil into AGENTS.md by hand; do not push."},
-      {"tool": "claude-code", "scope": "user", "class": "memory-global", "path": "~/.claude/memory", "note": "Cross-repo memory; same harvest treatment."},
-      {"tool": "claude-code", "scope": "user", "class": "history", "path": "~/.claude/history.jsonl", "note": "Prompt/command history; raw upstream of memory. Mine and distil, never push."},
-      {"tool": "claude-code", "scope": "user:path", "class": "transcripts", "path": "~/.claude/projects/{slug}/*.jsonl", "note": "Session transcript .jsonl files (sibling to the memory/ dir); richest harvest source."}
+      {"tool": "claude-code", "scope": "user:path", "class": "memory", "refinement": "derived", "path": "~/.claude/projects/{slug}/memory", "note": "Auto-memory keyed by working dir ({slug}), stored under home not the repo. Distil into AGENTS.md by hand; do not push."},
+      {"tool": "claude-code", "scope": "user", "class": "memory-global", "refinement": "derived", "path": "~/.claude/memory", "note": "Cross-repo memory; same harvest treatment."},
+      {"tool": "claude-code", "scope": "user", "class": "history", "refinement": "raw", "path": "~/.claude/history.jsonl", "note": "Prompt/command history; mostly operator-typed, raw upstream of memory. Mine and distil, never push."},
+      {"tool": "claude-code", "scope": "user:path", "class": "transcripts", "refinement": "raw", "path": "~/.claude/projects/{slug}/*.jsonl", "note": "Session transcript .jsonl files (sibling to the memory/ dir); richest harvest source."}
     ],
 
     "non-reusable": [
