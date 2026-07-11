@@ -6,17 +6,34 @@
 # `distill` plugin), between these two subcommands. Deployed by setup; do not
 # edit — edit setup's source (files/ai-distill) instead.
 #
-#   ai-distill prepare [run-dir]   — reqs 1–3: read the newest catalog,
-#       select refinement:derived, re-verify each sha256 and EXCLUDE
-#       mismatches (R2), sanitize each resource (canonicalize, opacity-unwrap,
-#       score, validate; §7 req 3), eliminate exact duplicates retaining all
-#       provenance, and emit a work package for the session to reason over.
-#   ai-distill accept <run-dir>    — reqs 9–12: validate the session's
-#       proposal.json against the schema and allowed paths (prose only, no
-#       executable config), enforce the recurrence gate on promotions, scan
-#       every promoted/suggested statement against the identifier denylist and
-#       a secret scanner, and stage an itemized REVIEW.md for the operator.
-#       Writes only under the run's staging dir — never workspace ai/.
+#   ai-distill prepare [run-dir]   — reqs 1–3: read the newest catalog, select
+#       refinement:derived, re-verify each sha256 and EXCLUDE mismatches (R2),
+#       sanitize (canonicalize, opacity-unwrap, score, validate; §7 req 3),
+#       exact-deduplicate, and emit a work package. Also open a quarantine pen
+#       and create the primary worktree — a linked git worktree of the
+#       workspace repo on branch distill/<run>, off the live path, where the
+#       session writes the distilled ai/ directly.
+#   ai-distill gate [run-dir] [target]   — run the deterministic checks on a
+#       target's branch diff (added lines: no secrets, no executable config,
+#       and for the hub no un-redacted identifiers; changed files must be ai/
+#       prose, or non-config for a target repo). No proposal, no REVIEW.md —
+#       git diff is the review artifact.
+#   ai-distill apply [run-dir] [target]  — re-gate, then merge the reviewed
+#       distill/<run> branch into the repo's live branch (the live tree, which
+#       the tools read, updates at once) and REMOVE the worktree and branch —
+#       no loose copy left behind.
+#   ai-distill discard [run-dir] [target]  — drop a worktree and its branch
+#       unapplied (a rejected proposal).
+#   ai-distill add-target <run-dir> <repo> — open a worktree for a
+#       suggest-to-repo target repo (the side channel), gated/applied the same
+#       way as the workspace hub, except its own identifiers are allowed.
+#
+# Workflow: prepare → the session edits <worktree>/ai/ directly and commits →
+# gate → the operator reviews `git diff` and iterates → apply merges into the
+# live tree and cleans up. The session never freehand-edits the LIVE ai/ (the
+# write-guard hook blocks it); only apply's merge mutates the live tree, on a
+# reviewed branch. Quarantined items stay in the run's quarantine pen, outside
+# every repo, until the operator rescues a false alarm into the worktree.
 #
 # No network, no model calls, no credentials. Only file: URLs are read; any
 # other scheme is listed, never fetched (§7 req 2). Content is read only to
@@ -69,12 +86,18 @@ INVISIBLE = dict.fromkeys([
 # so a separate hex regex would only double-count the same span.
 B64_RUN = re.compile(r"[A-Za-z0-9+/]{%d,}={0,2}" % MIN_RUN)
 
-DISPOSITIONS = {"promote-global", "suggest-to-repo", "discard-trivial",
-                "discard-specific", "quarantine"}
-# Promotions land in the shared prose sources only. mcp.json, commands/,
-# skills/, and agents/ are executable/structured config the pipeline never
-# proposes (§7 req 9); prose can't validly live there, so they are not targets.
-HUB_TARGET = re.compile(r"^ai/(AGENTS\.md|rules/)")
+# Files a hub (workspace ai/) promotion may touch — prose sources only.
+# mcp.json/commands/skills/agents are executable/structured config the pipeline
+# never proposes (§7 req 9); prose can't validly live there.
+HUB_FILE = re.compile(r"^ai/(AGENTS\.md|rules/[\w./-]+\.md)$")
+# Files a change must NOT touch in any target repo — executable/structured
+# config, never distilled prose.
+EXEC_CONFIG = re.compile(r"(?:\.json|\.ya?ml|\.toml|\.sh|\.py|\.js|\.ts)$"
+                         r"|(?:^|/)(?:hooks|scripts)/")
+# Executable/structured config appearing as *content* in an otherwise-prose
+# file (e.g. an mcpServers or command/args block pasted into AGENTS.md).
+EXEC_CONTENT = re.compile(r'"mcpServers"\s*:'
+                          r'|"command"\s*:\s*"[^"]*"[\s\S]{0,200}?"args"\s*:')
 
 # Natural-language words that a prose instruction carries but a shell command
 # line does not — the discriminator in looks_executable().
@@ -410,6 +433,103 @@ def scan_secrets(text, use_gitleaks):
     return sorted(set(hits))
 
 
+# ── git worktrees: a distilled change per target repo, off the live path ───
+#
+# Every repo a run touches (the workspace repo as the primary hub target, plus
+# any suggest-to-repo target) gets a linked worktree on branch distill/<run>,
+# branched from the live HEAD. The session edits the worktree directly; the
+# live tree — what the tools read — is never touched until apply merges the
+# reviewed branch in. On apply or discard the worktree and branch are removed,
+# so no loose copies are left behind.
+
+def git(repo, *args, check=True):
+    proc = subprocess.run(["git", "-C", repo, *args],
+                          capture_output=True, text=True)
+    if check and proc.returncode != 0:
+        sys.stderr.write("✗ git %s (in %s): %s\n"
+                         % (" ".join(args), repo, proc.stderr.strip()))
+        sys.exit(1)
+    return proc
+
+
+def is_git_repo(path):
+    return os.path.isdir(path) and subprocess.run(
+        ["git", "-C", path, "rev-parse", "--git-dir"],
+        capture_output=True).returncode == 0
+
+
+def load_targets(run_dir):
+    return load_json(os.path.join(run_dir, "targets.json")) or {}
+
+
+def save_targets(run_dir, targets):
+    write_json(os.path.join(run_dir, "targets.json"), targets)
+
+
+def add_worktree(run_dir, branch, repo, name, hub):
+    """Create a distill/<run> worktree of `repo` under the run dir. Returns the
+    target record; records the base commit for later diffing."""
+    repo = os.path.realpath(repo)
+    base = git(repo, "rev-parse", "HEAD").stdout.strip()
+    wt = os.path.join(run_dir, "worktree-%s" % name)
+    git(repo, "worktree", "add", "-b", branch, wt, "HEAD")
+    return {"repo": repo, "worktree": wt, "branch": branch, "base": base,
+            "hub": hub}
+
+
+def remove_worktree(target):
+    """Remove a worktree and its branch — no loose copy remains."""
+    repo, wt, branch = target["repo"], target["worktree"], target["branch"]
+    git(repo, "worktree", "remove", "--force", wt, check=False)
+    git(repo, "branch", "-D", branch, check=False)
+
+
+def parse_diff(diff_text):
+    """Return (changed repo-relative files, joined added lines) of a git diff."""
+    files, added = [], []
+    for line in diff_text.splitlines():
+        if line.startswith("+++ b/"):
+            files.append(line[6:])
+        elif line.startswith("+") and not line.startswith("+++"):
+            added.append(line[1:])
+    return files, "\n".join(added)
+
+
+def worktree_diff(target):
+    """The full change of a worktree vs its base, INCLUDING new files. Staging
+    (`add -A`) makes untracked files show in the diff; apply commits the same
+    staged state, so gate and apply always see identical content."""
+    wt, base = target["worktree"], target["base"]
+    git(wt, "add", "-A")
+    return git(wt, "diff", "--cached", base).stdout
+
+
+def check_target_diff(target, denylist, use_gitleaks):
+    """Run the deterministic gates on a target's branch diff (worktree vs its
+    base, new files included). Returns (changed files, errors)."""
+    hub = target["hub"]
+    files, added = parse_diff(worktree_diff(target))
+    errors = []
+    for f in files:
+        if hub:
+            if not HUB_FILE.match(f):
+                errors.append("changed a non-prose/out-of-ai file: %s" % f)
+        elif EXEC_CONFIG.search(f):
+            errors.append("changed an executable/config file: %s" % f)
+    if EXEC_CONTENT.search(added):
+        errors.append("added content contains executable configuration"
+                      " (MCP/command JSON) — prose only (req 9)")
+    secrets = scan_secrets(added, use_gitleaks)
+    if secrets:
+        errors.append("secret(s) in added lines: %s" % ", ".join(secrets))
+    if hub:
+        ids = scan_identifiers(added, denylist)
+        if ids:
+            errors.append("unredacted identifier(s) in added lines: %s"
+                          % ", ".join(ids[:5]))
+    return files, errors
+
+
 # ── prepare (reqs 1–3) ─────────────────────────────────────────────────────
 
 def prepare(run_dir=None):
@@ -507,11 +627,37 @@ def prepare(run_dir=None):
     os.symlink(os.path.basename(os.path.abspath(run_dir)), tmp)
     os.replace(tmp, latest)
 
+    # Quarantine pen — suspected injections the session sets aside; held here,
+    # outside every repo, until the operator judges one a false alarm.
+    os.makedirs(os.path.join(run_dir, "quarantine"), mode=0o700, exist_ok=True)
+
+    # Primary worktree: the workspace repo's ai/ on branch distill/<run>.
+    run_name = os.path.basename(os.path.abspath(run_dir))
+    branch = "distill/%s" % run_name
+    targets = {"run": run_name, "branch": branch, "targets": {}}
+    if is_git_repo(WORKSPACE_DIR):
+        if git(WORKSPACE_DIR, "rev-parse", "--verify", branch,
+               check=False).returncode == 0:
+            sys.stderr.write("✗ error: branch %s already exists in %s\n"
+                             % (branch, WORKSPACE_DIR))
+            sys.exit(1)
+        targets["targets"]["workspace"] = add_worktree(
+            run_dir, branch, WORKSPACE_DIR, "workspace", hub=True)
+    save_targets(run_dir, targets)
+
     flagged = sum(1 for it in item_list if it["opacity_score"] or it["annotations"])
     print("→ prepared %d item(s) (%d flagged), %d excluded → %s"
           % (len(item_list), flagged, len(excluded), run_dir))
-    print("→ review the work package, run the distill session, then:"
-          " ai-distill accept %s" % run_dir)
+    wt = targets["targets"].get("workspace", {}).get("worktree")
+    if wt:
+        print("→ edit the distilled ai/ in the worktree (branch %s):" % branch)
+        print("     %s/ai" % wt)
+        print("→ then: ai-distill gate %s   (checks the branch diff)" % run_dir)
+        print("→ then, on approval: ai-distill apply %s" % run_dir)
+    else:
+        sys.stderr.write("! no workspace git repo at %s — work package only;"
+                         " set AI_WORKSPACE_DIR to enable the worktree flow\n"
+                         % WORKSPACE_DIR)
 
 
 def write_report(run_dir, items, excluded, denylist):
@@ -553,169 +699,140 @@ def write_report(run_dir, items, excluded, denylist):
     os.chmod(path, 0o600)
 
 
-# ── accept (reqs 9–12) ─────────────────────────────────────────────────────
+# ── gate: run the deterministic checks on a target's branch diff ───────────
 
-def looks_executable(statement):
-    """req 9 prose-only heuristic: reject statements that carry executable or
-    structured configuration rather than instruction prose. Conservative on
-    false positives — prose that merely mentions a tool, flag, or inline code
-    must pass; only genuine config or a clear bare command line is rejected."""
-    s = statement.strip()
-    # Prose is never a JSON document. One predicate subsumes mcpServers,
-    # command/args, hooks, scripted-skill blocks, and any future config shape.
-    try:
-        if isinstance(json.loads(s), (dict, list)):
-            return "is structured/executable configuration (JSON)"
-    except (ValueError, TypeError):
-        pass
-    if re.search(r"(?:&&|\|\||\$\()", s):
-        return "contains shell metacharacters"
-    # A bare command line: one short line, a command/path first token, at least
-    # one flag, no sentence punctuation, and no natural-language function word.
-    # Prose instructions always carry a function word (the/to/when/use/…); a
-    # command line does not — so "always pass --no-verify when committing"
-    # passes while "npm run build --watch" is caught.
-    if ("\n" not in s and len(s) <= 120
-            and not re.search(r"[.,;:]\s", s)
-            and re.match(r"^[/~]?\w[\w./~-]*(?:\s|$)", s)
-            and re.search(r"(?:^|\s)--?[a-zA-Z][\w-]*(?:\s|=|$)", s)
-            and not (set(re.findall(r"[a-z']+", s.lower())) & FUNCTION_WORDS)):
-        return "looks like a bare command line"
-    return None
-
-
-def accept(run_dir):
-    run_dir = run_dir or os.path.join(STATE, "latest")
-    run_dir = os.path.realpath(run_dir)
-    wp = load_json(os.path.join(run_dir, "items.json"))
-    proposal = load_json(os.path.join(run_dir, "proposal.json"))
-    denydata = load_json(os.path.join(run_dir, "denylist.json"))
-    if not isinstance(wp, dict) or "items" not in wp:
-        sys.stderr.write("✗ error: no work package (items.json) in %s\n" % run_dir)
+def _load_run(run_dir):
+    run_dir = os.path.realpath(run_dir or os.path.join(STATE, "latest"))
+    targets = load_targets(run_dir)
+    if not targets.get("targets"):
+        sys.stderr.write("✗ error: no worktrees for %s — run ai-distill"
+                         " prepare first\n" % run_dir)
         sys.exit(1)
-    if not isinstance(proposal, dict) or "items" not in proposal:
-        sys.stderr.write("✗ error: no proposal.json in %s — the distillation"
-                         " session writes it\n" % run_dir)
-        sys.exit(1)
-    denylist = (denydata or {}).get("identifiers", [])
+    return run_dir, targets
 
-    # url -> slugs, for provenance validation + recurrence (req 8.b).
-    url_slugs = {}
-    known_urls = set()
-    for it in wp["items"]:
-        for u in it.get("provenance", []):
-            known_urls.add(u)
-            url_slugs.setdefault(u, set()).update(it.get("slugs", []))
 
+def _denylist(run_dir):
+    return (load_json(os.path.join(run_dir, "denylist.json"))
+            or {}).get("identifiers", [])
+
+
+def gate(run_dir, name=None):
+    run_dir, targets = _load_run(run_dir)
+    denylist = _denylist(run_dir)
     use_gitleaks = gitleaks_available()
-    errors = []
-    normalized = []
-    for i, item in enumerate(proposal["items"]):
-        tag = "item[%d]" % i
-        stmt = item.get("statement")
-        disp = item.get("disposition")
-        prov = item.get("provenance", [])
-        if not isinstance(stmt, str) or not stmt.strip():
-            errors.append("%s: empty statement" % tag)
-            continue
-        if disp not in DISPOSITIONS:
-            errors.append("%s: bad disposition %r" % (tag, disp))
-            continue
-        if not isinstance(prov, list) or not prov:
-            errors.append("%s: missing provenance" % tag)
-            continue
-        unknown = [u for u in prov if u not in known_urls]
-        if unknown:
-            errors.append("%s: provenance not in work package: %s"
-                          % (tag, ", ".join(unknown[:3])))
-            continue
-
-        # Prose-only (req 9) and secret scan (req 11) apply to anything that
-        # becomes an instruction file — both promotions and repo suggestions.
-        if disp in ("promote-global", "suggest-to-repo"):
-            exe = looks_executable(stmt)
-            if exe:
-                errors.append("%s: prose-only violation — %s (req 9)" % (tag, exe))
-            secrets = scan_secrets(stmt, use_gitleaks)
-            if secrets:
-                errors.append("%s: secret(s) detected %s (req 11)"
-                              % (tag, ", ".join(secrets)))
-
-        if disp == "promote-global":
-            # Identifier screen (req 5.a) is promotion-only: a suggest-to-repo
-            # item goes home to the project it names and legitimately keeps
-            # that project's identifiers; only hub-bound text must be clean.
-            hits = scan_identifiers(stmt, denylist)
-            if hits:
-                errors.append("%s: unredacted identifier(s) %s (req 5.a)"
-                              % (tag, ", ".join(hits[:5])))
-            # Recurrence (distinct source slugs) is a strengthening signal, not
-            # a veto (§7 req 8.b): ≥2 says a principle is already known general;
-            # a single source is allowed but demands demonstrated generality,
-            # surfaced to the reviewer. Not an error either way.
-            slugs = set()
-            for u in prov:
-                slugs |= url_slugs.get(u, set())
-            item["recurrence"] = len(slugs)
-            tgt = item.get("target", "")
-            if not (isinstance(tgt, str) and HUB_TARGET.match(tgt)):
-                errors.append("%s: promote-global target %r not under ai/ (req 10)"
-                              % (tag, tgt))
-
-        normalized.append(item)
-
-    if errors:
-        sys.stderr.write("✗ proposal rejected (%d error(s)):\n" % len(errors))
-        for e in errors:
-            sys.stderr.write("  ✗ %s\n" % e)
+    names = [name] if name else sorted(targets["targets"])
+    all_ok = True
+    for nm in names:
+        t = targets["targets"].get(nm)
+        if not t:
+            sys.stderr.write("✗ no target %r in this run\n" % nm)
+            sys.exit(1)
+        files, errors = check_target_diff(t, denylist, use_gitleaks)
+        if errors:
+            all_ok = False
+            sys.stderr.write("✗ %s: %d gate violation(s):\n" % (nm, len(errors)))
+            for e in errors:
+                sys.stderr.write("  ✗ %s\n" % e)
+        else:
+            print("→ %s: gate clean — %d file(s) changed in %s"
+                  % (nm, len(files), t["worktree"]))
+    if not all_ok:
         sys.exit(1)
-
-    staging = os.path.join(run_dir, "accepted")
-    os.makedirs(staging, mode=0o700, exist_ok=True)
-    write_json(os.path.join(staging, "proposal.normalized.json"),
-               {"generated": iso(now().timestamp()), "items": normalized})
-    write_review(staging, normalized, use_gitleaks)
-    print("→ accepted %d item(s); staged for review → %s"
-          % (len(normalized), staging))
-    print("→ review %s/REVIEW.md, then apply promotions to the workspace repo's"
-          " ai/ by hand (nothing is written there automatically)." % staging)
+    print("→ review the diff, then: ai-distill apply %s" % run_dir)
 
 
-def write_review(staging, items, use_gitleaks):
-    by_disp = {}
-    for it in items:
-        by_disp.setdefault(it["disposition"], []).append(it)
-    lines = ["# Distillation proposal — for review (req 12)", "",
-             "Every item passed the schema, prose-only, identifier, and secret"
-             " gates%s; recurrence is shown as a strengthening signal, not a"
-             " gate. Nothing here has been written to the workspace repo;"
-             " promotions are applied by the operator." %
-             ("" if use_gitleaks else " (secret scan: builtin fallback — gitleaks"
-              " not on PATH)"), ""]
-    for disp in ("promote-global", "suggest-to-repo", "quarantine",
-                 "discard-specific", "discard-trivial"):
-        group = by_disp.get(disp, [])
-        if not group:
+# ── apply / discard: merge a reviewed branch into the live tree, or drop it ─
+
+def _has_changes(target):
+    return bool(worktree_diff(target).strip())
+
+
+def apply(run_dir, name=None):
+    run_dir, targets = _load_run(run_dir)
+    denylist = _denylist(run_dir)
+    use_gitleaks = gitleaks_available()
+    names = [name] if name else sorted(targets["targets"])
+    for nm in names:
+        t = targets["targets"].get(nm)
+        if not t:
+            sys.stderr.write("✗ no target %r in this run\n" % nm)
+            sys.exit(1)
+        if t.get("applied"):
+            print("→ %s: already applied" % nm)
             continue
-        lines += ["## %s (%d)" % (disp, len(group)), ""]
-        for it in group:
-            tgt = it.get("target")
-            lines.append("- %s%s" % (it["statement"].strip().replace("\n", " "),
-                                     " → `%s`" % tgt if tgt else ""))
-            if disp == "promote-global":
-                rec = it.get("recurrence", 0)
-                note = ("recurrence %d (known-general)" % rec if rec >= 2
-                        else "single source — confirm generalizability")
-                lines.append("  - %s" % note)
-            lines.append("  - provenance: %s" % ", ".join(it["provenance"]))
-        lines.append("")
-    path = os.path.join(staging, "REVIEW.md")
-    with open(path, "w", encoding="utf-8") as fh:
-        fh.write("\n".join(lines) + "\n")
-    os.chmod(path, 0o600)
+        if not _has_changes(t):
+            print("→ %s: nothing to apply (worktree unchanged)" % nm)
+            continue
+        # Re-gate: never merge un-gated content.
+        _, errors = check_target_diff(t, denylist, use_gitleaks)
+        if errors:
+            sys.stderr.write("✗ %s: refusing to apply — %d gate violation(s):\n"
+                             % (nm, len(errors)))
+            for e in errors:
+                sys.stderr.write("  ✗ %s\n" % e)
+            sys.exit(1)
+        repo, wt, branch = t["repo"], t["worktree"], t["branch"]
+        # Commit any uncommitted worktree edits so the reviewed state merges.
+        if git(wt, "status", "--porcelain").stdout.strip():
+            git(wt, "add", "-A")
+            git(wt, "commit", "-m", "distill: %s" % targets["run"])
+        live = git(repo, "symbolic-ref", "--short", "HEAD").stdout.strip()
+        merge = git(repo, "merge", "--no-edit", branch, check=False)
+        if merge.returncode != 0:
+            git(repo, "merge", "--abort", check=False)
+            sys.stderr.write("✗ %s: merge into %s failed — resolve by hand:\n%s\n"
+                             % (nm, live, (merge.stdout + merge.stderr).strip()))
+            sys.exit(1)
+        remove_worktree(t)               # no loose copy left behind
+        t["applied"] = True
+        save_targets(run_dir, targets)
+        print("→ %s: merged %s into %s; worktree removed"
+              % (nm, branch, live))
+    print("→ done — the change is committed in the live repo history.")
 
 
-USAGE = "usage: ai-distill {prepare [run-dir] | accept [run-dir]}\n"
+def discard(run_dir, name=None):
+    run_dir, targets = _load_run(run_dir)
+    names = [name] if name else sorted(targets["targets"])
+    for nm in names:
+        t = targets["targets"].get(nm)
+        if not t or t.get("applied"):
+            continue
+        remove_worktree(t)               # worktree and branch both removed
+        t["discarded"] = True
+        print("→ %s: worktree and branch removed (nothing applied)" % nm)
+    save_targets(run_dir, targets)
+
+
+# ── add-target: a worktree for a suggest-to-repo target (side channel) ─────
+
+def add_target(run_dir, repo):
+    if repo is None or not is_git_repo(repo):
+        sys.stderr.write("✗ error: not a git repo: %s\n" % repo)
+        sys.exit(1)
+    run_dir, targets = _load_run(run_dir)
+    branch = targets["branch"]
+    name = os.path.basename(os.path.realpath(repo))
+    if name in targets["targets"]:
+        sys.stderr.write("✗ target %r already in this run\n" % name)
+        sys.exit(1)
+    if git(repo, "rev-parse", "--verify", branch, check=False).returncode == 0:
+        sys.stderr.write("✗ branch %s already exists in %s\n" % (branch, repo))
+        sys.exit(1)
+    targets["targets"][name] = add_worktree(run_dir, branch, repo, name,
+                                            hub=False)
+    save_targets(run_dir, targets)
+    wt = targets["targets"][name]["worktree"]
+    print("→ added target %r — edit its instruction files in the worktree:"
+          % name)
+    print("     %s" % wt)
+    print("→ then: ai-distill gate %s %s  →  apply %s %s   (or discard)"
+          % (run_dir, name, run_dir, name))
+
+
+USAGE = ("usage: ai-distill {prepare [run-dir] | gate [run-dir] [target]"
+         " | apply [run-dir] [target] | discard [run-dir] [target]"
+         " | add-target <run-dir> <repo>}\n")
 
 
 def main():
@@ -723,11 +840,18 @@ def main():
         sys.stderr.write(USAGE)
         sys.exit(0 if len(sys.argv) >= 2 else 2)
     cmd = sys.argv[1]
-    arg = sys.argv[2] if len(sys.argv) > 2 else None
+    a2 = sys.argv[2] if len(sys.argv) > 2 else None
+    a3 = sys.argv[3] if len(sys.argv) > 3 else None
     if cmd == "prepare":
-        prepare(arg)
-    elif cmd == "accept":
-        accept(arg)
+        prepare(a2)
+    elif cmd == "gate":
+        gate(a2, a3)
+    elif cmd == "apply":
+        apply(a2, a3)
+    elif cmd == "discard":
+        discard(a2, a3)
+    elif cmd == "add-target":
+        add_target(a2, a3)
     else:
         sys.stderr.write(USAGE)
         sys.exit(2)

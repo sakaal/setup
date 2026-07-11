@@ -1,6 +1,6 @@
 {
   "name": "distill",
-  "description": "Human-supervised distillation of harvested AI-tool knowledge into the shared instruction sources. Orchestrates ~/bin/ai-harvest and ~/bin/ai-distill (deterministic prepare/accept) around a skills-guided inference middle with per-stage model tiers; output is a staged, itemized proposal the operator reviews and commits. Binding requirements: docs/ai-pipeline-threat-model.md §7.",
+  "description": "Human-supervised distillation of harvested AI-tool knowledge into the shared instruction sources. Orchestrates ~/bin/ai-harvest and ~/bin/ai-distill (prepare/gate/apply) around a skills-guided inference middle with per-stage model tiers; the session writes the distilled ai/ directly in a git worktree off the live path, the operator reviews the diff, and apply merges it into the live ai/. Binding requirements: docs/ai-pipeline-threat-model.md §7.",
   "version": "0.1.0",
   "author": {
     "name": "Sakari Maaranen",
