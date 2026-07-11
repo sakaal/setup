@@ -1,0 +1,12 @@
+#!/bin/sh
+# Authors are responsible for their commits, not the tools they used to
+# produce them. Reject commit messages containing AI co-authorship lines.
+# Uses extended regex (-E) for clarity; case-insensitive (-i).
+
+if grep -iqE "^[[:space:]]*co-authored-by:.*(claude|chatgpt|gpt-[0-9]|copilot|gemini|anthropic|openai|noreply@anthropic)" "$1"; then
+    echo "" >&2
+    echo "  Commit rejected: AI co-authorship line detected." >&2
+    echo "  Remove any 'Co-Authored-By:' lines referencing AI assistants and try again." >&2
+    echo "" >&2
+    exit 1
+fi
