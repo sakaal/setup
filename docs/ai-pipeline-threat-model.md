@@ -465,7 +465,12 @@ handles content, 4 every stage that reads content into a model.
     commit messages (`git blame` keeps it per-line, permanently). No bespoke
     proposal format to drift from the real files; the `ai/` git history becomes
     the audit trail, and a source later found poisoned is traced and reverted
-    by ordinary git.
+    by ordinary git. The run keeps no second copy of the proposal: `report.md`
+    is a short digest, not a content dump — `prepare` writes its deterministic
+    top (counts, the sanitizer's attention flags, mechanical exclusions) and
+    the session appends where each item was routed (quarantined, suggested,
+    discarded, promoted). The item text is in `items.json` (the session's
+    input) and in the diff, so nothing is copied to be read twice.
 
 11. **Secret scan on the diff.** The gate scans the branch diff's added lines
     with established secret-scanning tooling (gitleaks-class — use the best
@@ -486,6 +491,14 @@ handles content, 4 every stage that reads content into a model.
     `add-target`, handles the `suggest-to-repo` side channel; that repo's own
     identifiers are allowed there, since they belong to it. Incremental runs keep
     each diff small enough that review is genuine rather than rubber-stamp.
+
+    *Forensic retention.* On apply, the worktree is removed and the one large,
+    reconstructable intermediate (`items.json`, rebuildable by re-running
+    `prepare` from the retained catalog) is pruned; the digest (`report.md`),
+    the quarantine pen, and the small state (`denylist.json`, `targets.json`)
+    are kept. The run directory stays a compact record of what was decided, and
+    the quarantined material — the most security-relevant trace, since it is the
+    corpus's suspected injection attempts — is never discarded by the pipeline.
 
 **Implementation shape.** The requirements are logical stages; how many
 passes implement them is an implementation choice. The intended shape is

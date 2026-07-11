@@ -232,6 +232,44 @@ You can also drive the deterministic parts directly — `ai-harvest`, then
 inspection or scripting; the plugin is only needed for the inference stages in
 the middle.
 
+### The run directory, and how to review
+
+Each run lives in its own directory under `~/.local/state/ai/distill/`, named
+`run-<timestamp>`, with a `latest` symlink to the newest. Everything the run
+produces is there, mode `0700`, and nothing about a run leaves your machine.
+What you will find, and what it is for:
+
+| Path | What it is |
+|---|---|
+| `worktree-workspace/` | A git worktree of your workspace repo on branch `distill/<run>`, off the live path. The session writes the distilled `ai/` here. This is what you review, as a git diff, and edit if you want changes. |
+| `report.md` | The run digest: counts, the items the sanitizer flagged for a look (hidden/encoded content, look-alike characters), what it mechanically excluded, and — appended by the session — where each item was routed (quarantined, suggested to a repo, discarded, promoted). It is a short index, not the content; the content is the git diff. |
+| `quarantine/` | Items the session judged possible injection attempts, held here **outside every repo**. Nothing is applied from here unless you decide an item is a false alarm and ask for it. |
+| `items.json` | The sanitized input the session reasoned over. It is the one large file, and it is pruned once the run is applied (it can be rebuilt from the harvest catalog); everything else is kept as a compact record. |
+| `denylist.json`, `targets.json` | Small state: the identifiers to redact, and the worktrees/branches this run owns. |
+
+**To review, edit, approve, and apply a run** (the `/distill` session walks you
+through this, but you can do it by hand):
+
+1. **Read the diff.** `git -C ~/.local/state/ai/distill/latest/worktree-workspace diff`
+   shows exactly what the run proposes for your `ai/`: additions, edits, and
+   removals across files. Skim `report.md` for the quarantined and flagged
+   items, which need a closer look.
+2. **Edit if you want changes.** Edit the files in that worktree directly, or
+   ask the session to. The live `ai/` is untouched while you do.
+3. **Gate.** `ai-distill gate <run>` re-checks the change: no secrets, no
+   executable configuration, no leaked project identifiers, only `ai/` prose
+   files. Fix anything it flags.
+4. **Apply, or discard.** When you approve, `ai-distill apply <run>` merges the
+   branch into your live `ai/`, removes the worktree, and prunes `items.json`;
+   the change is then a normal commit in your workspace repo's history, and the
+   next `setup`/`ai-sync` distributes it. To reject the whole run instead,
+   `ai-distill discard <run>` removes the worktree and branch, changing nothing.
+
+The design guarantees you are the gate: the session edits only the worktree, so
+nothing reaches your live `ai/` until you approve and `apply` merges the branch
+you reviewed. See [`docs/ai-pipeline-threat-model.md`](docs/ai-pipeline-threat-model.md)
+§7 for the full rationale.
+
 ## Repository layout
 
 ```
