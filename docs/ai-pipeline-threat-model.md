@@ -7,10 +7,10 @@ what they accumulate (harvest), and distils it back into the shared sources
 `files/ai-sync`, `files/ai-harvest`, `files/ai-distill`,
 `tasks/09-ai-config.yml`, `tasks/09-ai-sync.yml`, `tasks/09-ai-wire-one.yml`.
 Distillation is being implemented iteratively: `files/ai-distill` provides the
-deterministic `prepare` (reqs 1–3) and `accept` (reqs 9–12) bookends, and the
-`distill` plugin (`plugins/distill/`) carries the human-supervised session for
-the inference middle (reqs 4–8). §7 states the security requirements — agreed
-before the code, binding on every iteration.
+deterministic `prepare` (reqs 1–3) and `gate`/`apply` (reqs 9–12) bookends, and
+the `distill` plugin (`plugins/distill/`) carries the human-supervised session
+for the inference middle (reqs 4–8). §7 states the security requirements,
+agreed before the code and binding on every iteration.
 
 Publishing this document is deliberate (Kerckhoffs's principle — the repo
 ships mechanism, never the operator's content; the security must not depend
@@ -88,7 +88,7 @@ Trust boundaries:
   boundary.
 - **TB4 — distillation → workspace `ai/`.** The only writer to the source of
   truth. What crosses here becomes a standing instruction to every tool on
-  every machine. The human review gate lives here and is the hard control.
+  every machine. The human review gate lives here.
 
 ## 3. Assets
 
@@ -215,7 +215,7 @@ harvest catalogs it (certain and *intended*; harvest's job is location, not
 judgment) → distillation promotes it (the contested step — §7) → distribution
 installs it (certain, by design). The pipeline concentrates all defense at
 the single contested step, which is why TB4's human gate is designated the
-hard control and everything before it is layered assuming failure.
+primary control, and everything before it is layered assuming failure.
 
 T6 is the loop's blind spot: the agents being configured are themselves
 user-level processes that can write the workspace repo directly, skipping
@@ -473,23 +473,19 @@ handles content, 4 every stage that reads content into a model.
     of T2 (secrets smuggled into text destined for public repos).
 
 12. **Worktree-staged, human-gated, merged deterministically.** The session
-    never edits the LIVE `ai/` (the write-guard hook blocks it); it edits the
-    run's *worktree*, off the path the tools read. The operator reviews the
-    branch diff and iterates (edit the worktree, re-run `gate`, which
-    re-validates) until they approve. Only then does a deterministic step
-    (`ai-distill apply`) re-gate and **merge the reviewed branch** into the live
-    branch — updating the live `ai/` at once — then remove the worktree and
-    branch so no loose copy remains (TB4). Two properties make this the hard
-    control: the human gate is the *approval* (nothing lands un-reviewed), and
-    because apply merges exactly the reviewed branch, the live `ai/` is what was
-    reviewed — no drift, and no path for the session to slip un-approved text in
-    (live edits are blocked; only apply's merge mutates the live tree). Suspected
-    injections are set aside in the run's quarantine pen, outside every repo,
-    applied only on an explicit false-alarm call. The same worktree/gate/apply
-    machinery, pointed at another repo (`add-target`), handles the
-    `suggest-to-repo` side channel — with that repo's own identifiers allowed,
-    since they belong there. Incremental runs keep each diff small enough that
-    review is genuine rather than rubber-stamp.
+    never edits the live `ai/`; the write-guard hook blocks that. It edits the
+    run's worktree, off the path the tools read. The operator reviews the branch
+    diff and iterates (edit the worktree, re-run `gate`) until they approve.
+    Only then does `ai-distill apply` re-gate and merge the reviewed branch into
+    the live branch, then remove the worktree and branch (TB4). This is the
+    primary control because apply merges exactly the reviewed branch, so the
+    live `ai/` equals what was reviewed, and because the session cannot write the
+    live `ai/` any other way. Suspected injections are held in the run's
+    quarantine pen, outside every repo, applied only on an explicit false-alarm
+    call. The same worktree/gate/apply machinery, pointed at another repo with
+    `add-target`, handles the `suggest-to-repo` side channel; that repo's own
+    identifiers are allowed there, since they belong to it. Incremental runs keep
+    each diff small enough that review is genuine rather than rubber-stamp.
 
 **Implementation shape.** The requirements are logical stages; how many
 passes implement them is an implementation choice. The intended shape is

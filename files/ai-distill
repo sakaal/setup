@@ -477,45 +477,71 @@ def add_worktree(run_dir, branch, repo, name, hub):
             "hub": hub}
 
 
+def has_commits(repo):
+    return git(repo, "rev-parse", "--verify", "-q", "HEAD",
+               check=False).returncode == 0
+
+
 def remove_worktree(target):
-    """Remove a worktree and its branch — no loose copy remains."""
+    """Remove a worktree and its branch. Returns True on success; prunes stale
+    admin state so nothing is left behind."""
     repo, wt, branch = target["repo"], target["worktree"], target["branch"]
-    git(repo, "worktree", "remove", "--force", wt, check=False)
+    ok = git(repo, "worktree", "remove", "--force", wt, check=False).returncode == 0
+    git(repo, "worktree", "prune", check=False)
     git(repo, "branch", "-D", branch, check=False)
+    return ok and not os.path.exists(wt)
 
 
-def parse_diff(diff_text):
-    """Return (changed repo-relative files, joined added lines) of a git diff."""
-    files, added = [], []
-    for line in diff_text.splitlines():
-        if line.startswith("+++ b/"):
-            files.append(line[6:])
-        elif line.startswith("+") and not line.startswith("+++"):
-            added.append(line[1:])
-    return files, "\n".join(added)
-
-
-def worktree_diff(target):
-    """The full change of a worktree vs its base, INCLUDING new files. Staging
-    (`add -A`) makes untracked files show in the diff; apply commits the same
-    staged state, so gate and apply always see identical content."""
+def worktree_change(target):
+    """Structured change of a worktree vs its base. Uses git's own machine
+    output — not text scraping — so deletions, renames, and binary files are
+    all seen. Returns (paths, added_lines, has_binary):
+      paths       — every path touched (adds, mods, deletes, both rename ends)
+      added_lines — content added, hunk-aware (a content line starting with
+                    '+', e.g. '++x', is not mistaken for the '+++' header)
+      has_binary  — any binary file among the changes
+    `add -N` (intent-to-add) makes untracked files show in the diff without
+    staging their content, so the gate stays read-only-ish."""
     wt, base = target["worktree"], target["base"]
-    git(wt, "add", "-A")
-    return git(wt, "diff", "--cached", base).stdout
+    git(wt, "add", "-N", "-A")
+    paths = set()
+    for line in git(wt, "diff", "--name-status", base).stdout.splitlines():
+        cols = line.split("\t")
+        # A/M/D <path>, or R###/C### <old> <new> — take every named path.
+        paths.update(c for c in cols[1:] if c)
+    has_binary = False
+    for line in git(wt, "diff", "--numstat", base).stdout.splitlines():
+        cols = line.split("\t")
+        if len(cols) >= 2 and cols[0] == "-" and cols[1] == "-":
+            has_binary = True
+    added, in_hunk = [], False
+    for line in git(wt, "diff", "--unified=0", base).stdout.splitlines():
+        if line.startswith("@@"):
+            in_hunk = True
+        elif line[:1] in ("d", "i", "+", "-", "n", "B", "\\") and \
+                (line.startswith("diff ") or line.startswith("index ")
+                 or line.startswith("--- ") or line.startswith("+++ ")
+                 or line.startswith("new ") or line.startswith("deleted ")
+                 or line.startswith("Binary ")):
+            in_hunk = False
+        elif in_hunk and line.startswith("+"):
+            added.append(line[1:])
+    return sorted(paths), "\n".join(added), has_binary
 
 
 def check_target_diff(target, denylist, use_gitleaks):
-    """Run the deterministic gates on a target's branch diff (worktree vs its
-    base, new files included). Returns (changed files, errors)."""
+    """Run the deterministic gates on a target's change. Returns (paths, errors)."""
     hub = target["hub"]
-    files, added = parse_diff(worktree_diff(target))
+    paths, added, has_binary = worktree_change(target)
     errors = []
-    for f in files:
+    for f in paths:
         if hub:
             if not HUB_FILE.match(f):
-                errors.append("changed a non-prose/out-of-ai file: %s" % f)
+                errors.append("changed a non-prose/out-of-ai path: %s" % f)
         elif EXEC_CONFIG.search(f):
             errors.append("changed an executable/config file: %s" % f)
+    if hub and has_binary:
+        errors.append("a binary file is among the changes — prose only (req 9)")
     if EXEC_CONTENT.search(added):
         errors.append("added content contains executable configuration"
                       " (MCP/command JSON) — prose only (req 9)")
@@ -527,7 +553,7 @@ def check_target_diff(target, denylist, use_gitleaks):
         if ids:
             errors.append("unredacted identifier(s) in added lines: %s"
                           % ", ".join(ids[:5]))
-    return files, errors
+    return paths, errors
 
 
 # ── prepare (reqs 1–3) ─────────────────────────────────────────────────────
@@ -635,12 +661,17 @@ def prepare(run_dir=None):
     run_name = os.path.basename(os.path.abspath(run_dir))
     branch = "distill/%s" % run_name
     targets = {"run": run_name, "branch": branch, "targets": {}}
-    if is_git_repo(WORKSPACE_DIR):
-        if git(WORKSPACE_DIR, "rev-parse", "--verify", branch,
-               check=False).returncode == 0:
-            sys.stderr.write("✗ error: branch %s already exists in %s\n"
-                             % (branch, WORKSPACE_DIR))
-            sys.exit(1)
+    no_worktree = None
+    if not is_git_repo(WORKSPACE_DIR):
+        no_worktree = "not a git repo"
+    elif not has_commits(WORKSPACE_DIR):
+        no_worktree = "has no commits yet"
+    elif git(WORKSPACE_DIR, "rev-parse", "--verify", branch,
+             check=False).returncode == 0:
+        sys.stderr.write("✗ error: branch %s already exists in %s\n"
+                         % (branch, WORKSPACE_DIR))
+        sys.exit(1)
+    if no_worktree is None:
         targets["targets"]["workspace"] = add_worktree(
             run_dir, branch, WORKSPACE_DIR, "workspace", hub=True)
     save_targets(run_dir, targets)
@@ -655,9 +686,9 @@ def prepare(run_dir=None):
         print("→ then: ai-distill gate %s   (checks the branch diff)" % run_dir)
         print("→ then, on approval: ai-distill apply %s" % run_dir)
     else:
-        sys.stderr.write("! no workspace git repo at %s — work package only;"
-                         " set AI_WORKSPACE_DIR to enable the worktree flow\n"
-                         % WORKSPACE_DIR)
+        sys.stderr.write("! workspace %s %s — work package only; set"
+                         " AI_WORKSPACE_DIR to a committed git repo to enable"
+                         " the worktree flow\n" % (WORKSPACE_DIR, no_worktree))
 
 
 def write_report(run_dir, items, excluded, denylist):
@@ -701,12 +732,17 @@ def write_report(run_dir, items, excluded, denylist):
 
 # ── gate: run the deterministic checks on a target's branch diff ───────────
 
-def _load_run(run_dir):
+def _load_run(run_dir, require_targets=True):
     run_dir = os.path.realpath(run_dir or os.path.join(STATE, "latest"))
     targets = load_targets(run_dir)
-    if not targets.get("targets"):
-        sys.stderr.write("✗ error: no worktrees for %s — run ai-distill"
-                         " prepare first\n" % run_dir)
+    if "targets" not in targets:
+        sys.stderr.write("✗ error: no run at %s — run ai-distill prepare"
+                         " first\n" % run_dir)
+        sys.exit(1)
+    if require_targets and not targets["targets"]:
+        sys.stderr.write("✗ error: run %s has no worktrees (the workspace was"
+                         " not a git repo); add one with ai-distill"
+                         " add-target\n" % run_dir)
         sys.exit(1)
     return run_dir, targets
 
@@ -744,7 +780,8 @@ def gate(run_dir, name=None):
 # ── apply / discard: merge a reviewed branch into the live tree, or drop it ─
 
 def _has_changes(target):
-    return bool(worktree_diff(target).strip())
+    paths, _, _ = worktree_change(target)
+    return bool(paths)
 
 
 def apply(run_dir, name=None):
@@ -771,23 +808,51 @@ def apply(run_dir, name=None):
             for e in errors:
                 sys.stderr.write("  ✗ %s\n" % e)
             sys.exit(1)
-        repo, wt, branch = t["repo"], t["worktree"], t["branch"]
-        # Commit any uncommitted worktree edits so the reviewed state merges.
-        if git(wt, "status", "--porcelain").stdout.strip():
-            git(wt, "add", "-A")
-            git(wt, "commit", "-m", "distill: %s" % targets["run"])
-        live = git(repo, "symbolic-ref", "--short", "HEAD").stdout.strip()
-        merge = git(repo, "merge", "--no-edit", branch, check=False)
-        if merge.returncode != 0:
-            git(repo, "merge", "--abort", check=False)
-            sys.stderr.write("✗ %s: merge into %s failed — resolve by hand:\n%s\n"
-                             % (nm, live, (merge.stdout + merge.stderr).strip()))
+        repo, wt, branch, base = (t["repo"], t["worktree"], t["branch"],
+                                  t["base"])
+        # The live tree must be clean and idle: never disturb an operator's
+        # uncommitted work or an in-progress merge/rebase.
+        gitdir = git(repo, "rev-parse", "--git-dir").stdout.strip()
+        gitdir = gitdir if os.path.isabs(gitdir) else os.path.join(repo, gitdir)
+        if git(repo, "status", "--porcelain").stdout.strip() or \
+                os.path.exists(os.path.join(gitdir, "MERGE_HEAD")):
+            sys.stderr.write("✗ %s: workspace has uncommitted changes or an"
+                             " in-progress merge — commit or clean it, then"
+                             " re-run apply\n" % nm)
             sys.exit(1)
-        remove_worktree(t)               # no loose copy left behind
+        # The branch must still sit on the current live tip; if the live ai/
+        # moved since the run started, ask the operator to rebase rather than
+        # risk a conflicting merge.
+        live = git(repo, "symbolic-ref", "--short", "HEAD", check=False).stdout.strip()
+        if git(repo, "rev-parse", "HEAD").stdout.strip() != base:
+            sys.stderr.write("✗ %s: the live %s moved since this run started —"
+                             " rebase %s onto it (or start a fresh run), then"
+                             " apply\n" % (nm, live or "branch", branch))
+            sys.exit(1)
+        # Commit the reviewed worktree state, then SQUASH-merge so exactly the
+        # gated net tree lands as one commit — no intermediate (un-gated)
+        # commits enter the live history. Provenance from the branch's own
+        # commit subjects is carried into the squash message.
+        provenance = git(wt, "log", "--format=- %s", "%s..HEAD" % base,
+                         check=False).stdout.strip()
+        git(wt, "add", "-A")
+        if git(wt, "status", "--porcelain").stdout.strip():
+            git(wt, "commit", "-m", "distill: %s (worktree)" % targets["run"])
+        msg = "distill: %s\n\n%s" % (targets["run"], provenance) if provenance \
+            else "distill: %s" % targets["run"]
+        squash = git(repo, "merge", "--squash", branch, check=False)
+        if squash.returncode != 0:
+            sys.stderr.write("✗ %s: squash-merge into %s failed:\n%s\n"
+                             % (nm, live, (squash.stdout + squash.stderr).strip()))
+            sys.exit(1)
+        git(repo, "commit", "-m", msg)
+        if not remove_worktree(t):
+            sys.stderr.write("! %s: merged, but the worktree could not be"
+                             " removed cleanly — remove it by hand: %s\n"
+                             % (nm, wt))
         t["applied"] = True
         save_targets(run_dir, targets)
-        print("→ %s: merged %s into %s; worktree removed"
-              % (nm, branch, live))
+        print("→ %s: merged %s into %s; worktree removed" % (nm, branch, live))
     print("→ done — the change is committed in the live repo history.")
 
 
@@ -807,10 +872,10 @@ def discard(run_dir, name=None):
 # ── add-target: a worktree for a suggest-to-repo target (side channel) ─────
 
 def add_target(run_dir, repo):
-    if repo is None or not is_git_repo(repo):
-        sys.stderr.write("✗ error: not a git repo: %s\n" % repo)
+    if repo is None or not is_git_repo(repo) or not has_commits(repo):
+        sys.stderr.write("✗ error: not a git repo with commits: %s\n" % repo)
         sys.exit(1)
-    run_dir, targets = _load_run(run_dir)
+    run_dir, targets = _load_run(run_dir, require_targets=False)
     branch = targets["branch"]
     name = os.path.basename(os.path.realpath(repo))
     if name in targets["targets"]:
