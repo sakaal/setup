@@ -225,6 +225,10 @@ PAT mint, generation choices) belong here, not in `setup.sh`.
 - **Ansible modules**: FQCN (`ansible.builtin.command`, `community.general.ini_file`).
 - **Secrets**: `no_log: true` on every task that touches a secret value.
 - **YAML files**: end with `...` (document-end marker; makes truncation visible).
+- **Commit authorship**: authors are responsible for their commits, not the
+  tools used to produce them — no AI co-authorship lines. Enforced by
+  `.githooks/commit-msg`; after cloning, run
+  `git config core.hooksPath .githooks` once to activate it.
 
 ## Releases
 
