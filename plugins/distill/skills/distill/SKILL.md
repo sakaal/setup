@@ -1,6 +1,6 @@
 ---
 name: distill
-description: Runbook for a human-supervised distillation run — the inference middle (generalize, categorize, deduplicate, triage) that writes the distilled ai/ directly in a git worktree, between ai-distill's deterministic prepare and gate/apply. Encodes the security requirements of docs/ai-pipeline-threat-model.md §7. Use when running /distill or distilling harvested AI-tool knowledge into the shared instruction sources.
+description: Runbook for a human-supervised distillation run — the inference middle (generalize, categorize, deduplicate, triage) that writes the distilled ai/ directly in a git worktree, between ai-distill's deterministic prepare and gate/apply. Encodes the security requirements of docs/ai-pipeline-threat-model.md §7. Use when running /distill:distill or distilling harvested AI-tool knowledge into the shared instruction sources.
 ---
 
 # Distillation runbook

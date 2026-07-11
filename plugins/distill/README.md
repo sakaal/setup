@@ -20,7 +20,7 @@ lands in the shared sources without human review.
   → triage) that writes the distilled `ai/` directly in the worktree, then
   guides the operator through the `git diff` review, `apply`, and cleanup
 
-The plugin's parts: `commands/distill.md` (the `/distill` entry),
+The plugin's parts: `commands/distill.md` (the `/distill:distill` entry),
 `skills/distill/SKILL.md` (the runbook, with the language register and the
 standards-based label vocabulary), `agents/extractor.md` and
 `agents/merger.md` (the batched per-item and per-label-block subagents, each

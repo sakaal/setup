@@ -215,7 +215,7 @@ Run a distillation whenever your tools have accumulated enough new knowledge to
 be worth curating:
 
 ```
-/distill
+/distill:distill
 ```
 
 The session runs harvest → prepare, works through the generalize/categorize/
@@ -247,7 +247,7 @@ What you will find, and what it is for:
 | `items.json` | The sanitized input the session reasoned over. It is the one large file, and it is pruned once the run is applied (it can be rebuilt from the harvest catalog); everything else is kept as a compact record. |
 | `denylist.json`, `targets.json` | Small state: the identifiers to redact, and the worktrees/branches this run owns. |
 
-**To review, edit, approve, and apply a run** (the `/distill` session walks you
+**To review, edit, approve, and apply a run** (the `/distill:distill` session walks you
 through this, but you can do it by hand):
 
 1. **Read the diff.** `git -C ~/.local/state/ai/distill/latest/worktree-workspace diff`
