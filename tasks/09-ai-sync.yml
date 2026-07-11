@@ -6,9 +6,10 @@
 # non-destructively — absent/empty/already-ours → act/noop; real content →
 # recorded and halted, never clobbered.
 # generate/wrap entries: rendered by ~/bin/ai-sync (deployed and run below).
-# ~/bin/ai-harvest (harvest-lane catalog for human-curated distillation) is
-# deployed alongside but never run by the playbook — harvesting is a
-# curation-time action, not part of the bootstrap.
+# ~/bin/ai-harvest (harvest-lane catalog) and ~/bin/ai-distill (the
+# distillation prepare/accept bookends) are deployed alongside but never run
+# by the playbook — harvesting and distillation are curation-time actions,
+# not part of the bootstrap.
 #
 # Only user-scope entries are wired. Repo-scope entries in the manifest
 # document per-repo locations and are applied inside a repo, not by setup.
@@ -53,6 +54,12 @@
   ansible.builtin.copy:
     src: ai-harvest
     dest: "{{ home_dir }}/bin/ai-harvest"
+    mode: "0755"
+
+- name: Deploy the distillation bookends (~/bin/ai-distill)
+  ansible.builtin.copy:
+    src: ai-distill
+    dest: "{{ home_dir }}/bin/ai-distill"
     mode: "0755"
 
 - name: Render generated formats into each present tool

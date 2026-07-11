@@ -1,0 +1,737 @@
+#!/usr/bin/env python3
+#
+# ai-distill — distillation stage of the harvest pipeline. The deterministic
+# bookends of the hybrid design (docs/ai-pipeline-threat-model.md §7); the
+# inference middle (stages 4–8) runs as a human-supervised agent session (the
+# `distill` plugin), between these two subcommands. Deployed by setup; do not
+# edit — edit setup's source (files/ai-distill) instead.
+#
+#   ai-distill prepare [run-dir]   — reqs 1–3: read the newest catalog,
+#       select refinement:derived, re-verify each sha256 and EXCLUDE
+#       mismatches (R2), sanitize each resource (canonicalize, opacity-unwrap,
+#       score, validate; §7 req 3), eliminate exact duplicates retaining all
+#       provenance, and emit a work package for the session to reason over.
+#   ai-distill accept <run-dir>    — reqs 9–12: validate the session's
+#       proposal.json against the schema and allowed paths (prose only, no
+#       executable config), enforce the recurrence gate on promotions, scan
+#       every promoted/suggested statement against the identifier denylist and
+#       a secret scanner, and stage an itemized REVIEW.md for the operator.
+#       Writes only under the run's staging dir — never workspace ai/.
+#
+# No network, no model calls, no credentials. Only file: URLs are read; any
+# other scheme is listed, never fetched (§7 req 2). Content is read only to
+# sanitize and hash it. Uses only the standard library (system python3, 3.9+).
+
+import base64
+import binascii
+import glob
+import hashlib
+import json
+import os
+import re
+import subprocess
+import sys
+import unicodedata
+from datetime import datetime, timezone
+from pathlib import Path
+from urllib.parse import unquote, urlparse
+
+for _stream in (sys.stdout, sys.stderr):
+    try:
+        _stream.reconfigure(encoding="utf-8")
+    except (AttributeError, ValueError):
+        pass
+
+HOME = os.path.expanduser("~")
+HARVEST_LATEST = os.path.join(HOME, ".local", "state", "ai", "harvest", "latest")
+STATE = os.path.join(HOME, ".local", "state", "ai", "distill")
+WORKSPACE_DIR = os.environ.get("AI_WORKSPACE_DIR", os.path.join(HOME, "workspace"))
+
+# ── Sanitization tunables (§7 req 3) ──────────────────────────────────────
+MAX_FILE_BYTES = 512 * 1024        # 3.d size bound for a derived memory file
+MIN_RUN = 12                       # 3.b decode threshold (candidate chars);
+                                   # low, to catch short scattered fragments
+TEXT_RATIO = 0.85                  # printable ratio to call decoded bytes text
+LARGE_BINARY = 512                 # decoded binary beyond this → item invalid
+DECODE_DEPTH = 4                   # 3.b recursion depth cap (termination guard)
+
+# Invisible characters stripped in 3.a. Zero-width joiner (U+200D) is kept —
+# legitimate emoji sequences need it. BOM/word-joiner/bidi overrides go.
+INVISIBLE = dict.fromkeys([
+    0x200B, 0x200C,                        # zero-width space / non-joiner
+    0x2060, 0xFEFF,                        # word-joiner / BOM (zero-width nbsp)
+    0x202A, 0x202B, 0x202C, 0x202D, 0x202E,  # bidi embeddings/overrides
+    0x2066, 0x2067, 0x2068, 0x2069,          # bidi isolates (Trojan Source)
+], None)
+
+# One candidate-run regex. Hex is a subset of the base64 alphabet, so a hex
+# run of length ≥ MIN_RUN is matched here too; try_decode_run tries hex first,
+# so a separate hex regex would only double-count the same span.
+B64_RUN = re.compile(r"[A-Za-z0-9+/]{%d,}={0,2}" % MIN_RUN)
+
+DISPOSITIONS = {"promote-global", "suggest-to-repo", "discard-trivial",
+                "discard-specific", "quarantine"}
+# Promotions land in the shared prose sources only. mcp.json, commands/,
+# skills/, and agents/ are executable/structured config the pipeline never
+# proposes (§7 req 9); prose can't validly live there, so they are not targets.
+HUB_TARGET = re.compile(r"^ai/(AGENTS\.md|rules/)")
+
+# Natural-language words that a prose instruction carries but a shell command
+# line does not — the discriminator in looks_executable().
+FUNCTION_WORDS = frozenset("""a an the this that these those and or but nor for
+    to of in on at by from with as into onto over under per via not never
+    always prefer use avoid ensure when where if unless while do don't is are
+    be only also than then it its their your our no all any each every""".split())
+
+# Conservative secret patterns for the builtin fallback (real gitleaks is
+# preferred when on PATH; see req 11).
+SECRET_PATTERNS = [
+    ("github-pat", re.compile(r"\b(ghp|gho|ghu|ghs|ghr)_[A-Za-z0-9]{20,}")),
+    ("github-fine-pat", re.compile(r"\bgithub_pat_[A-Za-z0-9_]{20,}")),
+    ("aws-akid", re.compile(r"\bAKIA[0-9A-Z]{16}\b")),
+    ("private-key", re.compile(r"-----BEGIN (?:RSA |EC |OPENSSH |DSA |PGP )?PRIVATE KEY-----")),
+    ("slack-token", re.compile(r"\bxox[baprs]-[A-Za-z0-9-]{10,}")),
+    ("generic-assign", re.compile(
+        r"(?i)(secret|token|passwd|password|api[_-]?key)\s*[:=]\s*['\"][^'\"]{8,}['\"]")),
+]
+
+
+def now():
+    return datetime.now(timezone.utc)
+
+
+def iso(ts):
+    return datetime.fromtimestamp(ts, timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
+
+
+def load_json(path):
+    try:
+        with open(path, encoding="utf-8") as fh:
+            text = fh.read()
+        return json.loads(text) if text.strip() else {}
+    except FileNotFoundError:
+        return None
+    except (ValueError, OSError) as exc:
+        sys.stderr.write("✗ error: cannot read %s: %s\n" % (path, exc))
+        return None
+
+
+def write_json(path, obj):
+    tmp = path + ".tmp"
+    with open(tmp, "w", encoding="utf-8") as fh:
+        json.dump(obj, fh, indent=2, ensure_ascii=False)
+        fh.write("\n")
+    os.replace(tmp, path)
+    os.chmod(path, 0o600)
+
+
+def sha256_bytes(data):
+    return hashlib.sha256(data).hexdigest()
+
+
+def file_path_of(url):
+    parsed = urlparse(url)
+    if parsed.scheme != "file":
+        return None
+    return unquote(parsed.path)
+
+
+# ── 3.a–3.d sanitization ──────────────────────────────────────────────────
+
+def decode_text(data):
+    """3.a intrinsic decode: accept only encodings a deterministic check
+    identifies. Returns (text, encoding) or (None, None) for binary."""
+    if data.startswith(b"\xef\xbb\xbf"):
+        try:
+            return data[3:].decode("utf-8"), "utf-8-bom"
+        except UnicodeDecodeError:
+            return None, None
+    if data.startswith((b"\xff\xfe\x00\x00", b"\x00\x00\xfe\xff")):
+        try:
+            return data.decode("utf-32"), "utf-32-bom"
+        except (UnicodeDecodeError, LookupError):
+            return None, None
+    if data.startswith((b"\xff\xfe", b"\xfe\xff")):
+        try:
+            return data.decode("utf-16"), "utf-16-bom"
+        except UnicodeDecodeError:
+            return None, None
+    try:
+        return data.decode("utf-8"), "utf-8"
+    except UnicodeDecodeError:
+        return None, None
+
+
+LOOKALIKE_TAGS = ("<wide>", "<narrow>", "<font>", "<circle>")
+
+
+def has_letter_lookalike(text):
+    """A compatibility character that *impersonates* an ASCII letter/digit — a
+    width, narrow, font, or circled variant that NFKC-folds to a single ASCII
+    alphanumeric (fullwidth `ｉｇｎｏｒｅ` → `ignore`). Ordinary typography that
+    also folds to ASCII (… — ½ ™ ² ℃ ﬁ) decomposes under other tags
+    (fraction/super/square/compat) and is deliberately ignored, so this fires
+    only on genuine impersonation, not on punctuation or symbols."""
+    for ch in text:
+        if ch.isascii():
+            continue
+        if not unicodedata.decomposition(ch).startswith(LOOKALIKE_TAGS):
+            continue
+        folded = unicodedata.normalize("NFKC", ch)
+        if len(folded) == 1 and folded.isascii() and folded.isalnum():
+            return True
+    return False
+
+
+def canonicalize(text):
+    """3.a: NFC, strip invisibles/bidi (keep ZWJ), normalize line endings.
+    Returns (canonical_text, letter_lookalike)."""
+    text = unicodedata.normalize("NFC", text)
+    text = text.translate(INVISIBLE)
+    text = text.replace("\r\n", "\n").replace("\r", "\n")
+    return text, has_letter_lookalike(text)
+
+
+def looks_textual(data):
+    try:
+        s = data.decode("utf-8")
+    except UnicodeDecodeError:
+        return None
+    if not s:
+        return None
+    printable = sum(ch.isprintable() or ch in "\n\t " for ch in s)
+    return s if printable / len(s) >= TEXT_RATIO else None
+
+
+def try_decode_run(run):
+    """Return decoded bytes for an encoded run, or None if it is not a
+    decodable encoding."""
+    candidate = run.rstrip("=")
+    if re.fullmatch(r"[0-9a-fA-F]+", run) and len(run) % 2 == 0:
+        try:
+            return bytes.fromhex(run)
+        except ValueError:
+            pass
+    if len(candidate) % 4 != 1:  # a base64 body is never length%4==1
+        try:
+            return base64.b64decode(run + "=" * (-len(run) % 4), validate=True)
+        except (binascii.Error, ValueError):
+            pass
+    return None
+
+
+def unwrap(text, depth, annotations):
+    """3.b opacity unwrapping. Reveals encoded text as annotations (never
+    spliced into `text`), counts unwrappings, flags a large decoded binary.
+    Returns (score, invalid_reason_or_None)."""
+    if depth > DECODE_DEPTH:
+        # Termination-guard limit hit — surfaced to triage (§7 req 3.c/8.a),
+        # not swallowed silently.
+        annotations.append({"kind": "depth-limit-hit", "depth": depth})
+        return 0, None
+    score = 0
+    for match in B64_RUN.finditer(text):
+        run = match.group(0)
+        data = try_decode_run(run)
+        if data is None:
+            continue
+        revealed = looks_textual(data)
+        if revealed is not None:
+            score += 1
+            canon, _ = canonicalize(revealed)
+            annotations.append({"kind": "revealed-text", "depth": depth,
+                                "from": run[:24] + ("…" if len(run) > 24 else ""),
+                                "text": canon})
+            sub, invalid = unwrap(canon, depth + 1, annotations)
+            score += sub
+            if invalid:
+                return score, invalid
+        elif len(data) > LARGE_BINARY:
+            score += 1
+            return score, ("encoded large binary (%d bytes) in text" % len(data))
+        # else: small opaque token (hash/id) — left as-is, not counted.
+    return score, None
+
+
+def frontmatter_ok(text):
+    """3.d: if the file opens with YAML frontmatter it must close and be
+    non-empty and key-shaped. Files without frontmatter (e.g. index files)
+    are fine."""
+    if not text.startswith("---\n"):
+        return True
+    end = text.find("\n---", 4)
+    if end == -1:
+        return False
+    block = text[4:end].strip()
+    if not block:
+        return False
+    return any(re.match(r"^\s*[\w.-]+\s*:", line) for line in block.splitlines())
+
+
+def sanitize(data):
+    """Full 3.a–3.d on raw bytes. Returns a dict with either canonical text +
+    annotations + score, or an `invalid` reason."""
+    if len(data) > MAX_FILE_BYTES:
+        return {"invalid": "oversize (%d bytes > %d)" % (len(data), MAX_FILE_BYTES)}
+    text, encoding = decode_text(data)
+    if text is None:
+        return {"invalid": "not decodable as an accepted text encoding (binary)"}
+    canon, nfkc_differs = canonicalize(text)
+    annotations = []
+    if nfkc_differs:
+        annotations.append({"kind": "nfkc-lookalike",
+                            "note": "compatibility characters present (fullwidth/lookalike)"})
+    score, invalid = unwrap(canon, 1, annotations)
+    if invalid:
+        return {"invalid": invalid}
+    if not frontmatter_ok(canon):
+        return {"invalid": "malformed frontmatter"}
+    return {"text": canon, "encoding": encoding, "annotations": annotations,
+            "opacity_score": score}
+
+
+# ── Identifier denylist (§7 req 5.a; deterministic, from machine state) ────
+
+# Generic path/dev words that would over-match as identifiers if denylisted.
+# No operator-specific handle here — the operator's name/handle is added at
+# runtime from git config (git_identity_tokens), not hardcoded (invariant 5).
+COMMON_PATH_TOKENS = {"users", "home", "workspace", "documents", "var",
+                      "private", "tmp", "projects", "repos", "src", "code",
+                      "main", "master", "app", "api", "web", "lib", "core",
+                      "common", "docs", "test", "tests", "config", "dev",
+                      "prod", "staging", ""}
+
+
+def slug_tokens(slug):
+    toks = set()
+    if slug:
+        toks.add(slug)
+        for part in re.split(r"[-/_.\s]+", slug):
+            if part and part.lower() not in COMMON_PATH_TOKENS and len(part) > 2:
+                toks.add(part)
+    return toks
+
+
+def git_remote_identifiers(repo_dir):
+    toks = set()
+    try:
+        url = subprocess.run(
+            ["git", "-C", repo_dir, "remote", "get-url", "origin"],
+            capture_output=True, text=True, timeout=5).stdout.strip()
+    except (OSError, subprocess.SubprocessError):
+        return toks
+    if not url:
+        return toks
+    # host + owning-org path prefix + repo name (§7 req 5.a)
+    m = re.match(r"(?:git@|ssh://git@|https://)?([^:/]+)[:/](.+?)(?:\.git)?$", url)
+    if m:
+        host, path = m.group(1), m.group(2)
+        toks.add(host)
+        for part in path.split("/"):
+            if part:
+                toks.add(part)
+    return toks
+
+
+def git_identity_tokens():
+    """Operator identity from git config — name parts and the email local
+    part — so a personal name is redacted before promotion without hardcoding
+    it here (portable to any operator). Kept only in the local denylist,
+    never committed."""
+    toks = set()
+    for key in ("user.name", "user.email"):
+        try:
+            val = subprocess.run(["git", "config", "--get", key],
+                                 capture_output=True, text=True,
+                                 timeout=5).stdout.strip()
+        except (OSError, subprocess.SubprocessError):
+            val = ""
+        if not val:
+            continue
+        if "@" in val:
+            val = val.split("@", 1)[0]
+        for part in re.split(r"[-._\s]+", val):
+            if len(part) > 2 and part.lower() not in COMMON_PATH_TOKENS:
+                toks.add(part)
+    return toks
+
+
+def build_denylist(slugs):
+    toks = set()
+    for slug in slugs:
+        toks |= slug_tokens(slug)
+    toks |= git_identity_tokens()
+    if os.path.isdir(WORKSPACE_DIR):
+        for name in sorted(os.listdir(WORKSPACE_DIR)):
+            repo = os.path.join(WORKSPACE_DIR, name)
+            if os.path.isdir(os.path.join(repo, ".git")):
+                toks.add(name)
+                toks |= git_remote_identifiers(repo)
+    # Single filter over the whole union — every source (slugs, identity,
+    # repo names, remotes) is screened the same way, so no source can slip a
+    # generic word like "main" or "app" into the denylist.
+    return sorted(t for t in toks
+                  if len(t) > 2 and t.lower() not in COMMON_PATH_TOKENS)
+
+
+def scan_identifiers(text, denylist):
+    low = text.lower()
+    return sorted({t for t in denylist if re.search(
+        r"\b%s\b" % re.escape(t.lower()), low)})
+
+
+# ── Secret scan (§7 req 11) ────────────────────────────────────────────────
+
+def gitleaks_available():
+    try:
+        subprocess.run(["gitleaks", "version"], capture_output=True, timeout=5)
+        return True
+    except (OSError, subprocess.SubprocessError):
+        return False
+
+
+def scan_secrets(text, use_gitleaks):
+    hits = []
+    if use_gitleaks:
+        try:
+            proc = subprocess.run(
+                ["gitleaks", "stdin", "--no-banner", "--report-format", "json",
+                 "--report-path", "/dev/stdout"],
+                input=text, capture_output=True, text=True, timeout=30)
+            if proc.stdout.strip():
+                for f in json.loads(proc.stdout):
+                    hits.append(f.get("RuleID", "gitleaks"))
+                return sorted(set(hits))
+        except (OSError, subprocess.SubprocessError, ValueError):
+            pass  # fall through to builtin
+    for name, pat in SECRET_PATTERNS:
+        if pat.search(text):
+            hits.append(name)
+    return sorted(set(hits))
+
+
+# ── prepare (reqs 1–3) ─────────────────────────────────────────────────────
+
+def prepare(run_dir=None):
+    catalog = load_json(HARVEST_LATEST)
+    if not isinstance(catalog, dict) or "resources" not in catalog:
+        sys.stderr.write("✗ error: no usable harvest catalog at %s — run"
+                         " ai-harvest first\n" % HARVEST_LATEST)
+        sys.exit(1)
+
+    derived = [r for r in catalog["resources"]
+               if r.get("refinement") == "derived"]
+    slugs_all = sorted({r.get("slug") for r in catalog.get("resources", [])
+                        if r.get("slug")})
+
+    items = {}   # canonical-hash -> item (exact-dup merge, req 7 cheap pass)
+    excluded = []
+    for res in sorted(derived, key=lambda r: r.get("url", "")):
+        url = res.get("url", "")
+        path = file_path_of(url)
+        if path is None:
+            excluded.append({"url": url, "reason": "non-file URL (not fetched, req 2)"})
+            continue
+        try:
+            size = os.path.getsize(path)
+        except OSError as exc:
+            excluded.append({"url": url, "reason": "unreadable: %s" % exc})
+            continue
+        if size > MAX_FILE_BYTES:
+            # Reject on size before reading/hashing — a pathologically large
+            # file can't exhaust memory just to be excluded.
+            excluded.append({"url": url, "reason": "invalid: oversize (%d bytes"
+                             " > %d)" % (size, MAX_FILE_BYTES)})
+            continue
+        try:
+            with open(path, "rb") as fh:
+                data = fh.read()
+        except OSError as exc:
+            excluded.append({"url": url, "reason": "unreadable: %s" % exc})
+            continue
+        if sha256_bytes(data) != res.get("sha256"):
+            excluded.append({"url": url, "reason": "sha256 mismatch — excluded (R2);"
+                             " re-run ai-harvest"})
+            continue
+        san = sanitize(data)
+        if "invalid" in san:
+            excluded.append({"url": url, "reason": "invalid: %s" % san["invalid"]})
+            continue
+        key = sha256_bytes(san["text"].encode("utf-8"))
+        if key in items:
+            it = items[key]
+            it["provenance"].append(url)
+            if res.get("slug"):
+                it["slugs"] = sorted(set(it["slugs"]) | {res["slug"]})
+        else:
+            items[key] = {
+                "id": key[:12],
+                "class": res.get("class"),
+                "slugs": [res["slug"]] if res.get("slug") else [],
+                "provenance": [url],
+                "text": san["text"],
+                "annotations": san["annotations"],
+                "opacity_score": san["opacity_score"],
+                "chars": len(san["text"]),
+            }
+
+    item_list = sorted(items.values(), key=lambda it: (-len(it["slugs"]), it["id"]))
+    denylist = build_denylist(slugs_all)
+
+    stamp = now().strftime("%Y%m%dT%H%M%SZ")
+    run_dir = run_dir or os.path.join(STATE, "run-%s" % stamp)
+    os.makedirs(run_dir, mode=0o700, exist_ok=True)
+    os.chmod(run_dir, 0o700)
+
+    write_json(os.path.join(run_dir, "items.json"), {
+        "_note": "ai-distill work package — sanitized, exact-deduplicated"
+                 " derived items for the distillation session (reqs 1–3).",
+        "generated": iso(now().timestamp()),
+        "catalog": os.path.realpath(HARVEST_LATEST),
+        "items": item_list,
+        "excluded": excluded,
+    })
+    write_json(os.path.join(run_dir, "denylist.json"), {
+        "_note": "Identifier denylist for redaction/screening (req 5.a). Local"
+                 " state; never committed.",
+        "identifiers": denylist,
+    })
+    write_report(run_dir, item_list, excluded, denylist)
+
+    latest = os.path.join(os.path.dirname(os.path.abspath(run_dir)), "latest")
+    tmp = latest + ".tmp"
+    try:
+        os.remove(tmp)
+    except FileNotFoundError:
+        pass
+    os.symlink(os.path.basename(os.path.abspath(run_dir)), tmp)
+    os.replace(tmp, latest)
+
+    flagged = sum(1 for it in item_list if it["opacity_score"] or it["annotations"])
+    print("→ prepared %d item(s) (%d flagged), %d excluded → %s"
+          % (len(item_list), flagged, len(excluded), run_dir))
+    print("→ review the work package, run the distill session, then:"
+          " ai-distill accept %s" % run_dir)
+
+
+def write_report(run_dir, items, excluded, denylist):
+    lines = ["# Distillation work package", "",
+             "Sanitized, exact-deduplicated derived items (reqs 1–3). This is"
+             " input for the distillation session, not a proposal.", "",
+             "- items: %d" % len(items),
+             "- excluded/invalid: %d" % len(excluded),
+             "- identifier denylist size: %d" % len(denylist), ""]
+    flagged = [it for it in items if it["opacity_score"] or it["annotations"]]
+    if flagged:
+        lines += ["## Flagged for attention (opacity / lookalikes)", ""]
+        for it in flagged:
+            kinds = ",".join(sorted({a["kind"] for a in it["annotations"]}))
+            lines.append("- `%s` opacity=%d annotations=[%s] slugs=%d"
+                         % (it["id"], it["opacity_score"], kinds, len(it["slugs"])))
+        lines.append("")
+    lines += ["## Items", ""]
+    for it in items:
+        lines += ["### `%s` (%s · %d source(s) · %d chars · opacity %d)"
+                  % (it["id"], it["class"], len(it["slugs"]), it["chars"],
+                     it["opacity_score"]),
+                  "", "slugs: %s" % (", ".join(it["slugs"]) or "—"), ""]
+        for a in it["annotations"]:
+            if a["kind"] == "revealed-text":
+                lines += ["> revealed (depth %d) from `%s`:" % (a["depth"], a["from"]),
+                          "> ", "> " + a["text"].replace("\n", "\n> "), ""]
+            else:
+                lines += ["> annotation: %s" % a.get("note", a["kind"]), ""]
+        lines += ["```````markdown", it["text"].rstrip("\n"), "```````", ""]
+    if excluded:
+        lines += ["## Excluded / invalid", ""]
+        for e in excluded:
+            lines.append("- %s — %s" % (e["reason"], e["url"]))
+        lines.append("")
+    path = os.path.join(run_dir, "report.md")
+    with open(path, "w", encoding="utf-8") as fh:
+        fh.write("\n".join(lines) + "\n")
+    os.chmod(path, 0o600)
+
+
+# ── accept (reqs 9–12) ─────────────────────────────────────────────────────
+
+def looks_executable(statement):
+    """req 9 prose-only heuristic: reject statements that carry executable or
+    structured configuration rather than instruction prose. Conservative on
+    false positives — prose that merely mentions a tool, flag, or inline code
+    must pass; only genuine config or a clear bare command line is rejected."""
+    s = statement.strip()
+    # Prose is never a JSON document. One predicate subsumes mcpServers,
+    # command/args, hooks, scripted-skill blocks, and any future config shape.
+    try:
+        if isinstance(json.loads(s), (dict, list)):
+            return "is structured/executable configuration (JSON)"
+    except (ValueError, TypeError):
+        pass
+    if re.search(r"(?:&&|\|\||\$\()", s):
+        return "contains shell metacharacters"
+    # A bare command line: one short line, a command/path first token, at least
+    # one flag, no sentence punctuation, and no natural-language function word.
+    # Prose instructions always carry a function word (the/to/when/use/…); a
+    # command line does not — so "always pass --no-verify when committing"
+    # passes while "npm run build --watch" is caught.
+    if ("\n" not in s and len(s) <= 120
+            and not re.search(r"[.,;:]\s", s)
+            and re.match(r"^[/~]?\w[\w./~-]*(?:\s|$)", s)
+            and re.search(r"(?:^|\s)--?[a-zA-Z][\w-]*(?:\s|=|$)", s)
+            and not (set(re.findall(r"[a-z']+", s.lower())) & FUNCTION_WORDS)):
+        return "looks like a bare command line"
+    return None
+
+
+def accept(run_dir):
+    run_dir = run_dir or os.path.join(STATE, "latest")
+    run_dir = os.path.realpath(run_dir)
+    wp = load_json(os.path.join(run_dir, "items.json"))
+    proposal = load_json(os.path.join(run_dir, "proposal.json"))
+    denydata = load_json(os.path.join(run_dir, "denylist.json"))
+    if not isinstance(wp, dict) or "items" not in wp:
+        sys.stderr.write("✗ error: no work package (items.json) in %s\n" % run_dir)
+        sys.exit(1)
+    if not isinstance(proposal, dict) or "items" not in proposal:
+        sys.stderr.write("✗ error: no proposal.json in %s — the distillation"
+                         " session writes it\n" % run_dir)
+        sys.exit(1)
+    denylist = (denydata or {}).get("identifiers", [])
+
+    # url -> slugs, for provenance validation + recurrence (req 8.b).
+    url_slugs = {}
+    known_urls = set()
+    for it in wp["items"]:
+        for u in it.get("provenance", []):
+            known_urls.add(u)
+            url_slugs.setdefault(u, set()).update(it.get("slugs", []))
+
+    use_gitleaks = gitleaks_available()
+    errors = []
+    normalized = []
+    for i, item in enumerate(proposal["items"]):
+        tag = "item[%d]" % i
+        stmt = item.get("statement")
+        disp = item.get("disposition")
+        prov = item.get("provenance", [])
+        if not isinstance(stmt, str) or not stmt.strip():
+            errors.append("%s: empty statement" % tag)
+            continue
+        if disp not in DISPOSITIONS:
+            errors.append("%s: bad disposition %r" % (tag, disp))
+            continue
+        if not isinstance(prov, list) or not prov:
+            errors.append("%s: missing provenance" % tag)
+            continue
+        unknown = [u for u in prov if u not in known_urls]
+        if unknown:
+            errors.append("%s: provenance not in work package: %s"
+                          % (tag, ", ".join(unknown[:3])))
+            continue
+
+        # Prose-only (req 9) and secret scan (req 11) apply to anything that
+        # becomes an instruction file — both promotions and repo suggestions.
+        if disp in ("promote-global", "suggest-to-repo"):
+            exe = looks_executable(stmt)
+            if exe:
+                errors.append("%s: prose-only violation — %s (req 9)" % (tag, exe))
+            secrets = scan_secrets(stmt, use_gitleaks)
+            if secrets:
+                errors.append("%s: secret(s) detected %s (req 11)"
+                              % (tag, ", ".join(secrets)))
+
+        if disp == "promote-global":
+            # Identifier screen (req 5.a) is promotion-only: a suggest-to-repo
+            # item goes home to the project it names and legitimately keeps
+            # that project's identifiers; only hub-bound text must be clean.
+            hits = scan_identifiers(stmt, denylist)
+            if hits:
+                errors.append("%s: unredacted identifier(s) %s (req 5.a)"
+                              % (tag, ", ".join(hits[:5])))
+            # Recurrence (distinct source slugs) is a strengthening signal, not
+            # a veto (§7 req 8.b): ≥2 says a principle is already known general;
+            # a single source is allowed but demands demonstrated generality,
+            # surfaced to the reviewer. Not an error either way.
+            slugs = set()
+            for u in prov:
+                slugs |= url_slugs.get(u, set())
+            item["recurrence"] = len(slugs)
+            tgt = item.get("target", "")
+            if not (isinstance(tgt, str) and HUB_TARGET.match(tgt)):
+                errors.append("%s: promote-global target %r not under ai/ (req 10)"
+                              % (tag, tgt))
+
+        normalized.append(item)
+
+    if errors:
+        sys.stderr.write("✗ proposal rejected (%d error(s)):\n" % len(errors))
+        for e in errors:
+            sys.stderr.write("  ✗ %s\n" % e)
+        sys.exit(1)
+
+    staging = os.path.join(run_dir, "accepted")
+    os.makedirs(staging, mode=0o700, exist_ok=True)
+    write_json(os.path.join(staging, "proposal.normalized.json"),
+               {"generated": iso(now().timestamp()), "items": normalized})
+    write_review(staging, normalized, use_gitleaks)
+    print("→ accepted %d item(s); staged for review → %s"
+          % (len(normalized), staging))
+    print("→ review %s/REVIEW.md, then apply promotions to the workspace repo's"
+          " ai/ by hand (nothing is written there automatically)." % staging)
+
+
+def write_review(staging, items, use_gitleaks):
+    by_disp = {}
+    for it in items:
+        by_disp.setdefault(it["disposition"], []).append(it)
+    lines = ["# Distillation proposal — for review (req 12)", "",
+             "Every item passed the schema, prose-only, identifier, and secret"
+             " gates%s; recurrence is shown as a strengthening signal, not a"
+             " gate. Nothing here has been written to the workspace repo;"
+             " promotions are applied by the operator." %
+             ("" if use_gitleaks else " (secret scan: builtin fallback — gitleaks"
+              " not on PATH)"), ""]
+    for disp in ("promote-global", "suggest-to-repo", "quarantine",
+                 "discard-specific", "discard-trivial"):
+        group = by_disp.get(disp, [])
+        if not group:
+            continue
+        lines += ["## %s (%d)" % (disp, len(group)), ""]
+        for it in group:
+            tgt = it.get("target")
+            lines.append("- %s%s" % (it["statement"].strip().replace("\n", " "),
+                                     " → `%s`" % tgt if tgt else ""))
+            if disp == "promote-global":
+                rec = it.get("recurrence", 0)
+                note = ("recurrence %d (known-general)" % rec if rec >= 2
+                        else "single source — confirm generalizability")
+                lines.append("  - %s" % note)
+            lines.append("  - provenance: %s" % ", ".join(it["provenance"]))
+        lines.append("")
+    path = os.path.join(staging, "REVIEW.md")
+    with open(path, "w", encoding="utf-8") as fh:
+        fh.write("\n".join(lines) + "\n")
+    os.chmod(path, 0o600)
+
+
+USAGE = "usage: ai-distill {prepare [run-dir] | accept [run-dir]}\n"
+
+
+def main():
+    if len(sys.argv) < 2 or sys.argv[1] in ("-h", "--help"):
+        sys.stderr.write(USAGE)
+        sys.exit(0 if len(sys.argv) >= 2 else 2)
+    cmd = sys.argv[1]
+    arg = sys.argv[2] if len(sys.argv) > 2 else None
+    if cmd == "prepare":
+        prepare(arg)
+    elif cmd == "accept":
+        accept(arg)
+    else:
+        sys.stderr.write(USAGE)
+        sys.exit(2)
+
+
+if __name__ == "__main__":
+    main()
