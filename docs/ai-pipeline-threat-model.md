@@ -453,8 +453,13 @@ handles content, 4 every stage that reads content into a model.
 
 9. **Prose only; executable configuration never flows.** The distilled `ai/`
    carries prose instructions, never MCP servers, hooks, or scripted skills.
-   The gate rejects a change that touches an executable/config file or whose
-   added content is executable JSON (`mcpServers`, command/args). An
+   The gate rejects a change that touches an executable/config file, whose
+   added content is executable JSON (`mcpServers`, command/args), or whose new
+   object is not a regular file — a symlink (which could point out of the repo),
+   a gitlink (a submodule), or an exec-bit "prose" file are all refused. It
+   reads git's own machine output (`--raw`, `--numstat`, count-driven
+   `--unified=0` hunks), so no crafted filename, mode, header-shaped line, or
+   Unicode line separator can hide content from the added-line scans. An
    instruction can still be wrong; it cannot be a command line. (Complements
    §5.1: MCP changes are always direct human edits.)
 
@@ -483,9 +488,14 @@ handles content, 4 every stage that reads content into a model.
     diff and iterates (edit the worktree, re-run `gate`) until they approve.
     Only then does `ai-distill apply` re-gate and merge the reviewed branch into
     the live branch, then remove the worktree and branch (TB4). This is the
-    primary control because apply merges exactly the reviewed branch, so the
-    live `ai/` equals what was reviewed, and because the session cannot write the
-    live `ai/` any other way. Suspected injections are held in the run's
+    primary control because apply merges *exactly* the reviewed tree: `gate`
+    pins a fingerprint of the change it approved, and apply refuses unless the
+    worktree still hashes to it, so nothing can be swapped in between review and
+    merge. The write-guard hook is defense-in-depth on the ordinary write path
+    (Write/Edit/MultiEdit) — it steers the session to the worktree but is not a
+    hard boundary (it cannot see a `Bash` write); a session determined to edit
+    the live `ai/` another way is the T6 residual, carried by the `ai/` git
+    history and R3, not by this hook. Suspected injections are held in the run's
     quarantine pen, outside every repo, applied only on an explicit false-alarm
     call. The same worktree/gate/apply machinery, pointed at another repo with
     `add-target`, handles the `suggest-to-repo` side channel; that repo's own

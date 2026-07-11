@@ -2,8 +2,10 @@
 #
 # test-ai-distill.sh — fixture test for files/ai-distill. Builds a fake
 # harvest catalog and adversarial memory corpus, runs `prepare`, asserts the
-# sanitization and exact-dedup behaviour (§7 req 1–3), then runs `accept`
-# against crafted proposals to assert the gates (§7 req 9–12). Self-contained;
+# sanitization and exact-dedup behaviour (§7 req 1–3), then runs `gate`/`apply`
+# against crafted worktree changes to assert the gates (§7 req 9–12) — including
+# symlink/mode rejection, added-line-scan evasion, and the review→apply TOCTOU.
+# Self-contained;
 # touches nothing outside its mktemp dir. Needs python3 only.
 
 set -uo pipefail
@@ -196,8 +198,23 @@ printf 'x\n' > "$WT/mcp.json"; git -C "$WT" add mcp.json; chk "non-ai-file" 1; r
 # unredacted identifier in the hub -> reject
 TOK=$(python3 -c "import json;d=json.load(open('$RUN2/denylist.json'))['identifiers'];print(next((t for t in d if 'acme' in t.lower()), d[0] if d else 'zzz'))")
 printf '\n- A note about %s handling.\n' "$TOK" >> "$WT/ai/AGENTS.md"; chk "identifier" 1; reset_wt
+# symlink at an ai/ prose path (mode 120000) -> reject (filesystem escape)
+mkdir -p "$WT/ai/rules"; ln -s /etc/passwd "$WT/ai/rules/evil.md"; chk "symlink" 1; reset_wt
+# '++'-prefixed line must not hide the following secret from the added-line scan
+printf '\n++ decoration\ntoken: "ghp_ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789"\n' >> "$WT/ai/AGENTS.md"; chk "plusplus-secret" 1; reset_wt
+# a Unicode line separator (U+2028) must not orphan the secret after it
+printf '\nnote: \xe2\x80\xa8token = "ghp_ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789"\n' >> "$WT/ai/AGENTS.md"; chk "u2028-secret" 1; reset_wt
 # clean prose (a new rules file the session creates) -> gate clean
 mkdir -p "$WT/ai/rules"; printf '## Distilled\n- Prefer small, reviewable changes.\n' > "$WT/ai/rules/process.md"; chk "clean" 0
+
+# TOCTOU: worktree drift after a clean gate must block apply until it is re-gated
+printf '\n- sneaked in after review.\n' >> "$WT/ai/rules/process.md"
+if AI_WORKSPACE_DIR="$WS" python3 "$DISTILL" apply "$RUN2" >/dev/null 2>&1; then
+  echo "✗ apply merged worktree drift that was never re-gated (TOCTOU)"; FAILED=1
+fi
+# restore the reviewed content and re-gate so the legitimate apply below proceeds
+printf '## Distilled\n- Prefer small, reviewable changes.\n' > "$WT/ai/rules/process.md"
+gate || { echo "✗ re-gate after restore failed"; FAILED=1; }
 
 # report.md is a slim digest (no full-text dump)
 grep -qE '``````markdown|^## Items' "$RUN2/report.md" && { echo "✗ report.md still dumps item text"; FAILED=1; }
