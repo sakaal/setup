@@ -76,7 +76,7 @@ SETUP_DIR=~/workspace/setup /bin/bash -c "$(curl -fsSL https://raw.githubusercon
 Multiple environment variables combine space-separated on the same line:
 
 ```sh
-SETUP_DIR=~/workspace/setup SETUP_REF=v2.2.0 /bin/bash -c "$(curl -fsSL https://raw.githubusercontent.com/sakaal/setup/master/setup.sh)"
+SETUP_DIR=~/workspace/setup SETUP_REF=v2.2.1 /bin/bash -c "$(curl -fsSL https://raw.githubusercontent.com/sakaal/setup/master/setup.sh)"
 ```
 
 ### Pinning to a release tag
@@ -86,7 +86,7 @@ and re-executes from the clone, so everything past the initial
 bootstrap runs the pinned version:
 
 ```sh
-SETUP_REF=v2.2.0 /bin/bash -c "$(curl -fsSL https://raw.githubusercontent.com/sakaal/setup/master/setup.sh)"
+SETUP_REF=v2.2.1 /bin/bash -c "$(curl -fsSL https://raw.githubusercontent.com/sakaal/setup/master/setup.sh)"
 ```
 
 The ref in the URL (`master` above) selects only the entry script
@@ -95,7 +95,7 @@ alone still installs `master`. For an end-to-end pin, including the
 entry script, set both to the same tag:
 
 ```sh
-SETUP_REF=v2.2.0 /bin/bash -c "$(curl -fsSL https://raw.githubusercontent.com/sakaal/setup/v2.2.0/setup.sh)"
+SETUP_REF=v2.2.1 /bin/bash -c "$(curl -fsSL https://raw.githubusercontent.com/sakaal/setup/v2.2.1/setup.sh)"
 ```
 
 Tags are immutable refs. When a release is GPG-signed, you can
@@ -162,17 +162,17 @@ It is a three-part pipeline, all human-gated:
    URLs with checksums under `~/.local/state/ai/harvest/`. It reads content
    only to hash it and writes nothing back.
 2. **Distill** — `~/bin/ai-distill prepare` sanitizes and de-duplicates the
-   harvested memories into a work package **and** opens a git worktree of your
+   harvested memories into a work package and opens a git worktree of your
    workspace repo on branch `distill/<run>`, off the live path. A
    **human-supervised agent session** (the `distill` plugin) generalizes,
    categorizes, de-duplicates, and triages them, and writes the distilled
-   instructions **directly into that worktree's `ai/`** — refining, adding
+   instructions directly into that worktree's `ai/`, refining, adding
    scoped `rules/` files, reorganizing. `~/bin/ai-distill gate` checks the
    branch diff (prose only, no secrets, no leaked project identifiers).
 3. **Review & apply** — the git diff of that branch *is* the proposal. You
    review it (approve, or ask for edits the agent makes in the worktree and
    re-gates), and on approval `~/bin/ai-distill apply` merges the branch into
-   your live `ai/` and removes the worktree — no loose copy left. Nothing
+   your live `ai/` and removes the worktree. Nothing
    reaches the live `ai/` un-reviewed, and because apply merges exactly the
    reviewed branch, what lands is exactly what you saw. Suspected injections
    are held in a quarantine pen outside every repo; genuinely valuable
@@ -220,7 +220,7 @@ be worth curating:
 
 The session runs harvest → prepare, works through the generalize/categorize/
 deduplicate/triage stages under the runbook, and writes the distilled `ai/` in
-the run's worktree. It then **shows you the branch diff** (`git -C <worktree>
+the run's worktree. It then shows you the branch diff (`git -C <worktree>
 diff`) — the proposal. You review it interactively (approve, or ask for edits
 the agent makes in the worktree and re-gates), and on approval it runs
 `ai-distill apply`, which merges the branch into your live `ai/` and cleans up

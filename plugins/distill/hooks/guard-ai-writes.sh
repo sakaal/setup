@@ -1,6 +1,6 @@
 #!/bin/sh
 # guard-ai-writes.sh — enforce §7 req 12 during a distillation session: the
-# session must not freehand-edit the LIVE workspace ai/ (what the tools read).
+# session must not freehand-edit the live workspace ai/ (what the tools read).
 # It edits the run's worktree instead; apply merges that in. Scoped to active
 # runs by a marker the /distill command sets, so it never interferes with
 # ordinary work. Fail-open: any error → allow.
@@ -35,7 +35,7 @@ except Exception:
 live_ai="${AI_WORKSPACE_DIR:-${HOME}/workspace}/ai"
 case "$path" in
   "$live_ai"|"$live_ai"/*)
-    echo "distill session: refusing to write the LIVE workspace ai/ ($path)." \
+    echo "distill session: refusing to write the live workspace ai/ ($path)." \
          "Edit the run's worktree instead; 'ai-distill apply' merges it into" \
          "the live tree on your approval (threat model §7 req 12)." >&2
     exit 2

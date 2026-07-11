@@ -7,15 +7,15 @@ Perform one distillation run, faithfully to `docs/ai-pipeline-threat-model.md`
 §7 and the `distill` skill. You are the supervising operator's agent; the
 deterministic guarantees live in `~/bin/ai-distill`, your job is the inference
 middle and guiding the operator through review. Each run works on a git branch
-`distill/<run>` in a worktree off the live path. **Never freehand-edit the LIVE
-workspace `ai/`** (the guard hook blocks it) — you edit the run's *worktree*;
+`distill/<run>` in a worktree off the live path. Never freehand-edit the live
+workspace `ai/`; the guard hook blocks it. You edit the run's worktree, and
 `ai-distill apply` merges it into the live tree on the operator's approval.
 
 Load the **distill skill** and follow its runbook. In outline:
 
 1. **Prepare.** If a run directory was given, reuse it (resume). Otherwise run
    `~/bin/ai-harvest`, then `~/bin/ai-distill prepare`. `prepare` builds the
-   work package **and** creates the worktree (branch `distill/<run>`, printed
+   work package and creates the worktree (branch `distill/<run>`, printed
    as `.../worktree-workspace/ai`) and a `quarantine/` pen. Mark the session
    active: `touch "$HOME/.local/state/ai/distill/.session-active"`.
 2. **Read the work package** in the run dir: `items.json` (sanitized,
@@ -38,7 +38,7 @@ Load the **distill skill** and follow its runbook. In outline:
    path** and show the change: `git -C <run>/worktree-workspace diff`. Discuss:
    they may approve or ask for edits (reword, retarget, drop, reclassify) —
    make each edit in the worktree and re-gate, then show the refreshed diff.
-   Loop until they explicitly **approve**. On approval, run
+   Loop until they explicitly approve. On approval, run
    `~/bin/ai-distill apply <run-dir>` — it re-gates, merges `distill/<run>`
    into the live branch (the live `ai/` updates at once), and removes the
    worktree and branch. **The run is complete once that merge lands.** If they

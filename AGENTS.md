@@ -171,17 +171,20 @@ reads content only to hash it and never writes to tool paths.
 **non-reusable.** A decision record; neither this lane nor harvest is ever
 machine-applied.
 
-**Distillation** (hybrid — deterministic `ai-distill prepare`/`accept`
-scripts bracketing a human-supervised agent session for the inference
-middle; no model API calls or credentials in the pipeline) consumes
-the catalog and lands reviewed output in the workspace repo's `ai/` sources —
-nothing flows from harvest into distribution without review. It runs
-sanitize → generalize → categorize → deduplicate → triage, then stages an
-itemized proposal for human review. The session half ships as the `distill`
-plugin (this repo is its own Claude Code plugin marketplace — see
-`.claude-plugin/marketplace.json` and `plugins/distill/`); the plugin is
-tool-specific packaging around agent-neutral process content, the same way
-`ai-sync` has per-tool emitters. Three principles:
+**Distillation** is hybrid: deterministic `ai-distill` scripts
+(`prepare`/`gate`/`apply`) bracket a human-supervised agent session for the
+inference middle, with no model API calls or credentials in the pipeline. It
+runs sanitize → generalize → categorize → deduplicate → triage, and lands
+reviewed output in the workspace repo's `ai/`. `prepare` opens a git worktree
+of the workspace repo on branch `distill/<run>`, off the live path; the
+session writes the distilled `ai/` directly in that worktree; `gate` checks
+the branch diff; and on the operator's approval `apply` merges the branch into
+the live `ai/` and removes the worktree. The branch diff is the review
+artifact, so nothing reaches the live `ai/` un-reviewed. The session half ships
+as the `distill` plugin (this repo is its own Claude Code plugin marketplace,
+`.claude-plugin/marketplace.json` and `plugins/distill/`), tool-specific
+packaging around agent-neutral process content, as `ai-sync` has per-tool
+emitters. Three principles:
 
 - **Derived-first.** The default input is the knowledge the tools already
   distilled once (`refinement: derived` — memories, not transcripts); the
