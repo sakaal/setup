@@ -1,5 +1,9 @@
 ---
-# 08-shell-env.yml — machine-local shell environment baseline.
+# 08-shell-env.yml — machine-local shell environment: ~/.local/bin on PATH, and
+# the GitHub Copilot CLI pointed at the shared AI hub. Both are written into the
+# user's shell startup files so they persist across shells (not set once by
+# Ansible), each in its own idempotent blockinfile marker region with a
+# shell-side guard so the value never duplicates across nested/login shells.
 #
 # Guarantees ~/.local/bin is on PATH.  That directory is the conventional
 # drop point for user-local binaries — pipx (hence Ansible), pass-cli on
@@ -26,6 +30,22 @@
       case ":$PATH:" in
         *":$HOME/.local/bin:"*) ;;
         *) export PATH="$HOME/.local/bin:$PATH" ;;
+      esac
+  loop:
+    - .zprofile
+    - .bashrc
+
+- name: Point the GitHub Copilot CLI at the shared AI hub (zsh and bash startup files)
+  ansible.builtin.blockinfile:
+    path: "{{ home_dir }}/{{ item }}"
+    create: true
+    mode: "0644"
+    marker: "# {mark} ANSIBLE MANAGED — Copilot CLI custom-instructions dir"
+    block: |
+      # GitHub Copilot CLI reads AGENTS.md and .github/instructions/ from these dirs
+      case ",$COPILOT_CUSTOM_INSTRUCTIONS_DIRS," in
+        *",$HOME/.config/ai,"*) ;;
+        *) export COPILOT_CUSTOM_INSTRUCTIONS_DIRS="${COPILOT_CUSTOM_INSTRUCTIONS_DIRS:+$COPILOT_CUSTOM_INSTRUCTIONS_DIRS,}$HOME/.config/ai" ;;
       esac
   loop:
     - .zprofile
