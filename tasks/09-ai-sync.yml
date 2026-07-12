@@ -62,6 +62,27 @@
     dest: "{{ home_dir }}/bin/ai-distill"
     mode: "0755"
 
+- name: Ensure the AI shared-data directory exists
+  ansible.builtin.file:
+    path: "{{ home_dir }}/.local/share/ai"
+    state: directory
+    mode: "0755"
+
+# ai-distill's identifier screen (§7 req 5.a) recognizes ordinary known words so
+# it does not redact them as identifiers. The word set is layered: the vendored,
+# integrity-pinned SCOWL English list, plus cspell's curated software-terms list
+# (ssh/sdk/ansible/…); each NOTICE carries its licence.
+- name: Deploy the identifier-screen wordlists (SCOWL + cspell) and notices
+  ansible.builtin.copy:
+    src: "{{ item.src }}"
+    dest: "{{ home_dir }}/.local/share/ai/{{ item.dest }}"
+    mode: "0644"
+  loop:
+    - {src: ai-wordlist.txt.gz, dest: wordlist.txt.gz}
+    - {src: ai-wordlist.NOTICE, dest: wordlist.NOTICE}
+    - {src: ai-terms.txt, dest: terms.txt}
+    - {src: ai-terms.NOTICE, dest: terms.NOTICE}
+
 - name: Render generated formats into each present tool
   ansible.builtin.command:
     cmd: "{{ home_dir }}/bin/ai-sync"

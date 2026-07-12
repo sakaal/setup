@@ -83,6 +83,14 @@ add("raw.jsonl", "{}\n", "-Users-you-projects-alpha", cls="transcripts",
 # identifier that should land on the denylist via a slug token
 add("idcarrier.md", "---\nname: y\ndescription: d\nmetadata:\n  type: project\n---\n\nAcmecorp specific note.\n",
     "-Users-you-projects-acmecorp")
+# dictionary-screen: a slug carrying a common English word ("release") and a
+# technical term ("ansible", from the cspell software-terms layer) that were NOT
+# in the old hardcoded stop-list, a proper noun ("london", which the lowercase-
+# only SCOWL extraction excludes), plus a distinctive token ("widgetron"). The
+# screen must release the two known words and redact the proper noun and the
+# distinctive token.
+add("dictscreen.md", "---\nname: z\ndescription: d\nmetadata:\n  type: project\n---\n\nWidgetron release note.\n",
+    "-Users-you-projects-release-ansible-london-widgetron")
 
 catalog = {"generated": "2026-07-11T00:00:00Z", "resources": resources}
 with open(os.path.join(harvest, "catalog-fixture.json"), "w") as fh:
@@ -161,6 +169,19 @@ for needle in ("binary", "large binary", "oversize", "frontmatter",
                "non-file", "mismatch"):
     if needle not in reasons:
         fails.append("expected exclusion reason missing: %s" % needle)
+
+# dictionary-screen (§7 req 5.a): known words released, distinctive names kept
+denylist = json.load(open(run + "/denylist.json"))["identifiers"]
+if "release" in denylist:
+    fails.append("English word 'release' wrongly redacted as an identifier")
+if "ansible" in denylist:
+    fails.append("technical term 'ansible' wrongly redacted as an identifier")
+if "london" not in denylist:
+    fails.append("proper noun 'london' wrongly released (should stay redacted)")
+if "widgetron" not in denylist:
+    fails.append("distinctive token 'widgetron' missing from denylist")
+if "acmecorp" not in denylist:
+    fails.append("distinctive token 'acmecorp' missing from denylist")
 
 if fails:
     for f in fails: print("✗", f)
