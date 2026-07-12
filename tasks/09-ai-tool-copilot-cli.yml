@@ -1,0 +1,59 @@
+---
+# 09-ai-tool-copilot-cli.yml — install GitHub Copilot CLI cross-platform
+# macOS: official Homebrew cask (standalone binary, auto-updates)
+# Linux: official binary from GitHub releases (auto-updates via `copilot update`)
+# Both platforms land the `copilot` binary in PATH so it's immediately available.
+# Imported by 09-ai-tools.yml.
+
+- name: Install GitHub Copilot CLI (Homebrew cask on macOS)
+  community.general.homebrew_cask:
+    name: copilot-cli
+    state: present
+  when: ansible_facts['system'] | default('') == "Darwin"
+  tags: [ai-tools]
+
+- name: Install GitHub Copilot CLI (binary on Linux)
+  when: ansible_facts['system'] | default('') == "Linux"
+  tags: [ai-tools]
+  block:
+    - name: Detect Copilot CLI installation
+      ansible.builtin.stat:
+        path: "{{ home_dir }}/.local/bin/copilot"
+      register: copilot_binary
+
+    - name: Get latest Copilot CLI release (Linux)
+      ansible.builtin.uri:
+        url: https://api.github.com/repos/github/copilot-cli/releases/latest
+        return_content: true
+      register: copilot_latest
+      when: not copilot_binary.stat.exists
+
+    - name: Assert a supported Linux architecture for the Copilot CLI
+      ansible.builtin.assert:
+        that: ansible_facts['architecture'] in ['x86_64', 'aarch64']
+        fail_msg: "No Copilot CLI Linux binary for architecture '{{ ansible_facts['architecture'] }}' (supported: x86_64, aarch64)."
+      when: not copilot_binary.stat.exists
+
+    - name: Determine Copilot CLI asset for Linux architecture
+      ansible.builtin.set_fact:
+        copilot_linux_asset: "{{ copilot_latest.json.assets | selectattr('name', 'match', asset_pattern) | map(attribute='browser_download_url') | first }}"
+      vars:
+        arch_suffix: "{{ {'x86_64': 'x64', 'aarch64': 'arm64'}[ansible_facts['architecture']] }}"
+        asset_pattern: "^copilot-linux-{{ arch_suffix }}\\.tar\\.gz$"
+      when: not copilot_binary.stat.exists
+
+    - name: Ensure ~/.local/bin exists (unarchive does not create dest)
+      ansible.builtin.file:
+        path: "{{ home_dir }}/.local/bin"
+        state: directory
+        mode: "0755"
+      when: not copilot_binary.stat.exists
+
+    - name: Download and extract Copilot CLI (Linux)
+      ansible.builtin.unarchive:
+        src: "{{ copilot_linux_asset }}"
+        dest: "{{ home_dir }}/.local/bin"
+        remote_src: true
+        mode: u+x
+      when: not copilot_binary.stat.exists
+...

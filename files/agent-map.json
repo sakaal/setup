@@ -16,12 +16,11 @@
   },
 
   "scopes": {
-    "user": "resides in the user's home; applies to the user globally",
-    "repo": "resides in and applies to the whole repo — the working tree the tool runs in (tools variously call it project/workspace/repository; here it is always a git repo)"
+    "user": "delivered into the user's home (~/.<tool>); applies to everything the user does, in any workspace or none. The explicit choice for content that must reach outside the workspace.",
+    "workspace": "referenced from the workspace root so every project cloned inside the workspace inherits it (via the tool's upward file discovery); applies across all projects in that workspace. The default for the shared ai/ sources. The workspace repo holds ai/ plus scaffolding; the projects inside are their own git repos and carry their own project-scoped config, which never lives here."
   },
   "subscopes": {
-    ":path": "path-specific by location — a particular path or subtree (e.g. user:path)",
-    ":pattern": "glob-matched — applies to files matching a pattern (e.g. repo:pattern; Cursor 'globs:', Copilot 'applyTo:')"
+    ":path": "path-specific by location — a particular path or subtree (e.g. user:path)"
   },
   "refinement": {
     "raw": "verbatim record of what happened; citable evidence, highest injection exposure",
@@ -37,14 +36,16 @@
   "hub": {
     "dir": "~/.config/ai",
     "workspace_subdir": "ai",
-    "sources": ["AGENTS.md", "mcp.json", "commands", "skills", "agents", "rules"]
+    "sources": ["AGENTS.md", "mcp.json", "commands", "skills", "agents", "rules"],
+    "_note": "The always-on instruction set is AGENTS.md plus every file in rules/ — the same guidance partitioned by topic for manageability, not a separate glob-scoped feature. Both are workspace scope by default and are delivered together through the instructions channel: a tool with an include mechanism references them in place; a flat-file tool has AGENTS.md and the `rules/` files composed into its one instruction file. The agent applies a rule when its topic is relevant; nothing enables it per repo."
   },
 
   "detect": {
     "claude-code": "~/.claude",
     "openai-codex": "~/.codex",
     "gemini-cli": "~/.gemini",
-    "cursor": "~/.cursor"
+    "cursor": "~/.cursor",
+    "github-copilot": "~/.copilot"
   },
 
   "entries": {
@@ -63,32 +64,34 @@
       {"tool": "gemini-cli", "scope": "user", "class": "mcp", "path": "~/.gemini/settings.json", "sync": "generate", "source": "mcp.json", "format": "mcp-json", "key": "mcpServers"},
       {"tool": "gemini-cli", "scope": "user", "class": "commands", "path": "~/.gemini/commands", "sync": "ignore", "note": "TOML, not Markdown; needs a wrap emitter."},
 
-      {"tool": "cursor", "scope": "user", "class": "instructions", "path": null, "sync": "ignore", "note": "User Rules are app-managed; shared instructions reach Cursor at repo scope via AGENTS.md."},
+      {"tool": "cursor", "scope": "user", "class": "instructions", "path": null, "sync": "ignore", "note": "User Rules are app-managed; shared instructions reach Cursor at workspace scope via AGENTS.md."},
       {"tool": "cursor", "scope": "user", "class": "mcp", "path": "~/.cursor/mcp.json", "sync": "generate", "source": "mcp.json", "format": "mcp-json", "key": "mcpServers"},
 
-      {"tool": "github-copilot", "scope": "user", "class": "instructions", "path": null, "sync": "ignore", "note": "IDE user settings; no standalone file."},
-      {"tool": "github-copilot", "scope": "user", "class": "mcp", "path": null, "sync": "ignore", "note": "Editor-managed (e.g. VS Code mcp.json); path varies by editor/OS."},
+      {"tool": "github-copilot", "scope": "user", "class": "instructions", "path": null, "sync": "ignore", "note": "The CLI has no user-global instructions file — `copilot init` writes repo-level .github/copilot-instructions.md (workspace scope) and it reads workspace AGENTS.md; the IDE extension's user instructions are app-managed."},
+      {"tool": "github-copilot", "scope": "user", "class": "mcp", "path": "~/.copilot/mcp-config.json", "sync": "generate", "source": "mcp.json", "format": "mcp-json", "key": "mcpServers", "note": "Copilot CLI user MCP config; top-level key 'mcpServers' (verified). The IDE extension's MCP is editor-managed separately."},
+      {"tool": "github-copilot", "scope": "user", "class": "skills", "path": "~/.copilot/skills", "sync": "link", "source": "skills", "note": "Copilot CLI personal skills dir (verified via `copilot skill --help`: ~/.copilot/skills/) — SKILL.md files, same shape as the hub skills, symlinked in. Plugins (copilot plugin install) are tool-managed installed extensions, not distributed; they fall under the non-reusable wildcard."},
 
-      {"tool": "claude-code", "scope": "repo", "class": "instructions", "path": "CLAUDE.md", "sync": "import", "source": "AGENTS.md"},
-      {"tool": "claude-code", "scope": "repo", "class": "mcp", "path": ".mcp.json", "sync": "generate", "source": "mcp.json", "format": "mcp-json", "key": "mcpServers"},
-      {"tool": "claude-code", "scope": "repo", "class": "commands", "path": ".claude/commands", "sync": "link", "source": "commands"},
-      {"tool": "claude-code", "scope": "repo", "class": "skills", "path": ".claude/skills", "sync": "link", "source": "skills"},
-      {"tool": "claude-code", "scope": "repo", "class": "agents", "path": ".claude/agents", "sync": "link", "source": "agents"},
+      {"tool": "claude-code", "scope": "workspace", "class": "instructions", "path": "CLAUDE.md", "sync": "import", "source": "AGENTS.md"},
+      {"tool": "claude-code", "scope": "workspace", "class": "mcp", "path": ".mcp.json", "sync": "generate", "source": "mcp.json", "format": "mcp-json", "key": "mcpServers"},
+      {"tool": "claude-code", "scope": "workspace", "class": "commands", "path": ".claude/commands", "sync": "link", "source": "commands"},
+      {"tool": "claude-code", "scope": "workspace", "class": "skills", "path": ".claude/skills", "sync": "link", "source": "skills"},
+      {"tool": "claude-code", "scope": "workspace", "class": "agents", "path": ".claude/agents", "sync": "link", "source": "agents"},
+      {"tool": "claude-code", "scope": "workspace", "class": "rules", "path": "CLAUDE.md", "sync": "ignore", "source": "rules", "note": "Rules ride the workspace-root CLAUDE.md stub as @imports alongside AGENTS.md (Claude walks up the tree to load it; @import takes files not directories, so each rule is listed). No working emitter yet — the stub is hand-authored, and ai-sync will own composing it (AGENTS.md plus each ai/rules/*.md) into the one CLAUDE.md; the AGENTS.md backstop keeps rules in force until then. Not machine-applied, so it does not collide with the instructions entry on the same path."},
 
-      {"tool": "openai-codex", "scope": "repo", "class": "instructions", "path": "AGENTS.md", "sync": "link", "source": "AGENTS.md", "note": "Read natively; the standard filename."},
+      {"tool": "openai-codex", "scope": "workspace", "class": "instructions", "path": "AGENTS.md", "sync": "link", "source": "AGENTS.md", "note": "Read natively; the standard filename."},
 
-      {"tool": "gemini-cli", "scope": "repo", "class": "instructions", "path": "GEMINI.md", "sync": "link", "source": "AGENTS.md"},
-      {"tool": "gemini-cli", "scope": "repo", "class": "commands", "path": ".gemini/commands", "sync": "ignore", "note": "TOML — needs a wrap emitter."},
+      {"tool": "gemini-cli", "scope": "workspace", "class": "instructions", "path": "GEMINI.md", "sync": "link", "source": "AGENTS.md"},
+      {"tool": "gemini-cli", "scope": "workspace", "class": "commands", "path": ".gemini/commands", "sync": "ignore", "note": "TOML — needs a wrap emitter."},
 
-      {"tool": "cursor", "scope": "repo", "class": "instructions", "path": "AGENTS.md", "sync": "link", "source": "AGENTS.md", "note": "Cursor reads AGENTS.md natively."},
-      {"tool": "cursor", "scope": "repo", "class": "mcp", "path": ".cursor/mcp.json", "sync": "generate", "source": "mcp.json", "format": "mcp-json", "key": "mcpServers"},
-      {"tool": "cursor", "scope": "repo", "class": "commands", "path": ".cursor/commands", "sync": "link", "source": "commands"},
-      {"tool": "cursor", "scope": "repo:pattern", "class": "rules", "path": ".cursor/rules", "sync": "ignore", "note": "Glob-scoped ('globs:'); reference the shared rules in place where the format matches (symlink), else a wrap emitter renders them into the tool's format."},
+      {"tool": "cursor", "scope": "workspace", "class": "instructions", "path": "AGENTS.md", "sync": "link", "source": "AGENTS.md", "note": "Cursor reads AGENTS.md natively."},
+      {"tool": "cursor", "scope": "workspace", "class": "mcp", "path": ".cursor/mcp.json", "sync": "generate", "source": "mcp.json", "format": "mcp-json", "key": "mcpServers"},
+      {"tool": "cursor", "scope": "workspace", "class": "commands", "path": ".cursor/commands", "sync": "link", "source": "commands"},
+      {"tool": "cursor", "scope": "workspace", "class": "rules", "path": ".cursor/rules", "sync": "ignore", "note": "Rules are the topical partition of the always-on instruction set (see hub._note), not a glob-scoped feature; they reach Cursor with AGENTS.md through the instructions channel. Cursor's rules directory with alwaysApply:true is an optional native target — emitter not built."},
 
-      {"tool": "github-copilot", "scope": "repo", "class": "instructions", "path": ".github/copilot-instructions.md", "sync": "import", "source": "AGENTS.md"},
-      {"tool": "github-copilot", "scope": "repo", "class": "commands", "path": ".github/prompts", "sync": "link", "source": "commands", "note": "Prompt files (*.prompt.md)."},
-      {"tool": "github-copilot", "scope": "repo", "class": "agents", "path": ".github/chatmodes", "sync": "link", "source": "agents", "note": "Custom chat modes (*.chatmode.md) — Copilot's agent equivalent."},
-      {"tool": "github-copilot", "scope": "repo:pattern", "class": "rules", "path": ".github/instructions", "sync": "ignore", "note": "Glob-scoped ('applyTo:'); reference the shared rules in place where the format matches (symlink), else a wrap emitter renders them into the tool's format."}
+      {"tool": "github-copilot", "scope": "workspace", "class": "instructions", "path": ".github/copilot-instructions.md", "sync": "import", "source": "AGENTS.md"},
+      {"tool": "github-copilot", "scope": "workspace", "class": "commands", "path": ".github/prompts", "sync": "link", "source": "commands", "note": "Prompt files (*.prompt.md)."},
+      {"tool": "github-copilot", "scope": "workspace", "class": "agents", "path": ".github/chatmodes", "sync": "link", "source": "agents", "note": "Custom chat modes (*.chatmode.md) — Copilot's agent equivalent."},
+      {"tool": "github-copilot", "scope": "workspace", "class": "rules", "path": ".github/instructions", "sync": "ignore", "note": "Rules are the topical partition of the always-on instruction set (see hub._note), not a glob-scoped feature; they reach Copilot with AGENTS.md through the instructions channel. Copilot's instructions directory with applyTo:'**' is an optional native target — emitter not built."}
     ],
 
     "harvest": [
@@ -105,7 +108,8 @@
       {"tool": "claude-code", "scope": "user", "class": "other", "path": "~/.claude/**"},
       {"tool": "openai-codex", "scope": "user", "class": "other", "path": "~/.codex/**"},
       {"tool": "gemini-cli", "scope": "user", "class": "other", "path": "~/.gemini/**"},
-      {"tool": "cursor", "scope": "user", "class": "other", "path": "~/.cursor/**"}
+      {"tool": "cursor", "scope": "user", "class": "other", "path": "~/.cursor/**"},
+      {"tool": "github-copilot", "scope": "user", "class": "other", "path": "~/.copilot/**", "note": "Tool-managed state: config.json, installed plugins, sessions, session-store.db, logs, ide integration, and auth — everything under ~/.copilot except the mcp-config.json and skills carved out in distribute."}
     ]
   }
 }

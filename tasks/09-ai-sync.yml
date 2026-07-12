@@ -11,8 +11,9 @@
 # by the playbook — harvesting and distillation are curation-time actions,
 # not part of the bootstrap.
 #
-# Only user-scope entries are wired. Repo-scope entries in the manifest
-# document per-repo locations and are applied inside a repo, not by setup.
+# Only user-scope entries are wired. Workspace-scope entries in the manifest
+# document locations applied at the workspace root (inherited by the projects
+# inside), not by setup.
 
 - name: Reset the wiring-conflict accumulator
   ansible.builtin.set_fact:
