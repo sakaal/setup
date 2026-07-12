@@ -68,6 +68,10 @@
       ansible.builtin.import_tasks: tasks/08-shell-env.yml
       tags: [shell-env]
 
+    - name: Install AI assistants
+      ansible.builtin.import_tasks: tasks/09-ai-tools.yml
+      tags: [ai]
+
     - name: Configure AI assistants (hub + sync)
       ansible.builtin.import_tasks: tasks/09-ai-config.yml
       tags: [ai]

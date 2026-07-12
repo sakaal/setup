@@ -1,0 +1,17 @@
+---
+# 09-ai-tool-codex-cli.yml — install OpenAI Codex CLI. Official native installer
+# (OpenAI's recommended method; a native binary, no Node.js runtime dependency).
+# It installs to $CODEX_INSTALL_DIR or $HOME/.local/bin and symlinks
+# ~/.local/bin/codex — the user-isolated layout this repo prefers, on macOS and
+# Linux alike. The tool self-updates (`codex --upgrade` / `codex update`), so
+# `creates:` installs it only when that binary is absent. The pipe runs under
+# bash with `set -o pipefail` so a failed download fails the task instead of
+# being masked by the installer's exit status. Imported by 09-ai-tools.yml.
+
+- name: Install OpenAI Codex CLI (official native installer)
+  ansible.builtin.shell:
+    cmd: set -o pipefail && curl -fsSL https://chatgpt.com/codex/install.sh | sh
+    executable: /bin/bash
+    creates: "{{ home_dir }}/.local/bin/codex"
+  tags: [ai-tools]
+...

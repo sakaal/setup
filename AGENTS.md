@@ -131,12 +131,20 @@ own directory, use `$SCRIPT_DIR` (resolved early in `setup.sh`).
 
 ## AI-assistant configuration (realizes 5, 8, 9)
 
+The enrolled tools are installed by `tasks/09-ai-tools.yml`, which imports one
+file per tool (`09-ai-tool-<name>.yml`) — each an idempotent, install-if-missing
+step preferring the tool's official installer — immediately before
+`09-ai-config.yml`. The configuration stage wires a tool once its config
+directory exists (which its `detect` entry keys on), so wiring lands the same
+run for a tool whose installer creates that directory and the next run
+otherwise; the playbook is idempotent either way.
+
 `agent-map.json` is the authoritative, data-driven sync manifest: entries are
 grouped by **lane** (`distribute` / `harvest` / `non-reusable`); each
 distribute entry carries its path, `sync` method
 (`link`/`import`/`generate`/`wrap`/`ignore`), and — where it has a working
 hook — a `source`/`format`. The manifest also defines the `scope`/`subscope`
-vocabulary (`user`/`repo`, `:path`/`:pattern`) and the `{slug}` placeholder
+vocabulary (`user`/`workspace`, `:path`) and the `{slug}` placeholder
 convention (path values are RFC 6570-style URI templates); that legend is
 authoritative, so consult it rather than duplicating it here.
 
@@ -151,13 +159,14 @@ are wired to the hub.
 
 *Reference in place, don't copy.* The default is to point a tool at the
 shared source where it already lives — a symlink (`link`) to the hub at user
-scope, or, for repo-scope rules that ship inside a deployed working copy, the
+scope, or, for workspace-scope sources referenced from the workspace root, the
 tool's own config pointed at that in-tree path. The copy/transform methods
 (`import`/`generate`/`wrap`) are the exception, only for tools that cannot
-read the shared file natively (e.g. a glob-scoped `rules` format a tool won't
-load by reference). Repo-scope entries are applied inside the working repo,
-not by the user-global sync (stage 09 wires user scope only); the manifest
-records their per-repo locations and method.
+read the shared set natively (e.g. a flat instruction file that must be
+composed from `AGENTS.md` plus the `rules/` files — something a symlink can't
+do). Workspace-scope entries are applied at the workspace root and inherited by
+the projects inside it, not by the user-global sync (stage 09 currently wires
+user scope only); the manifest records their locations and methods.
 
 **harvest.** These entries locate the knowledge a curation run distils
 upward. `~/bin/ai-harvest` (deployed by stage 09, run manually at curation

@@ -1,0 +1,24 @@
+---
+# 09-ai-tools.yml — install the AI assistant tools themselves, ahead of the
+# configuration stage (09-ai-config.yml). That stage wires a tool once its
+# config directory exists (its `detect` entry keys on that): the installer
+# creates it for some tools, the tool's own first launch for others — so a tool
+# is wired the same run or the next, and the playbook is idempotent either way.
+# One file per tool (imported below): each install is bespoke, so it stays
+# self-contained rather than looped. Every one is idempotent, install-if-missing
+# — safe to re-run — and prefers the tool's official installer. Adding a tool is
+# a new 09-ai-tool-<name>.yml plus a line here. Imported by setup.yml
+# immediately before 09-ai-config.yml.
+
+- name: Install Claude Code
+  ansible.builtin.import_tasks: 09-ai-tool-claude-code.yml
+  tags: [ai-tools]
+
+- name: Install OpenAI Codex CLI
+  ansible.builtin.import_tasks: 09-ai-tool-codex-cli.yml
+  tags: [ai-tools]
+
+- name: Install GitHub Copilot CLI
+  ansible.builtin.import_tasks: 09-ai-tool-copilot-cli.yml
+  tags: [ai-tools]
+...

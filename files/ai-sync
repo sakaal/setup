@@ -176,7 +176,7 @@ def main():
     # touches.
     acted = False
     for entry in manifest.get("entries", {}).get("distribute", []):
-        # Match scope by its base (user vs repo); a :path/:pattern suffix
+        # Match scope by its base (user vs workspace); a :path suffix
         # refines but does not change which engine owns the entry.
         if entry.get("scope", "").split(":", 1)[0] != "user":
             continue
