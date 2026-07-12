@@ -1,9 +1,14 @@
 ---
 # 08-shell-env.yml — machine-local shell environment: ~/.local/bin on PATH, and
-# the GitHub Copilot CLI pointed at the shared AI hub. Both are written into the
-# user's shell startup files so they persist across shells (not set once by
-# Ansible), each in its own idempotent blockinfile marker region with a
-# shell-side guard so the value never duplicates across nested/login shells.
+# the GitHub Copilot CLI pointed at the shared AI hub. Both persist across shells
+# via idempotent blockinfile marker regions (not set once by Ansible), each with
+# a shell-side guard so the value never duplicates.
+#
+# The zsh file differs by purpose: PATH goes in .zprofile because macOS's
+# /etc/zprofile path_helper reorders PATH at login and would clobber it if set
+# earlier; COPILOT_CUSTOM_INSTRUCTIONS_DIRS is a plain variable, so it belongs in
+# .zshenv, which is sourced for EVERY zsh (login, interactive, non-interactive) —
+# the CLI then has it however its shell was started. bash uses .bashrc for both.
 #
 # Guarantees ~/.local/bin is on PATH.  That directory is the conventional
 # drop point for user-local binaries — pipx (hence Ansible), pass-cli on
@@ -48,6 +53,6 @@
         *) export COPILOT_CUSTOM_INSTRUCTIONS_DIRS="${COPILOT_CUSTOM_INSTRUCTIONS_DIRS:+$COPILOT_CUSTOM_INSTRUCTIONS_DIRS,}$HOME/.config/ai" ;;
       esac
   loop:
-    - .zprofile
+    - .zshenv
     - .bashrc
 ...
