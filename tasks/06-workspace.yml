@@ -117,13 +117,13 @@
     - workspace_remote_ok | default(false)
 
 # Case 3 — lay non-destructively onto the workspace dir.
-- name: Ensure ~/{{ workspace_dir }} exists (no mode change if already there)
+- name: Ensure ~/{{ workspace_dir }} exists (no mode change if already there)  # noqa: risky-file-permissions
   ansible.builtin.file:
     path: "{{ home_dir }}/{{ workspace_dir }}"
     state: directory
   when: not workspace_git_stat.stat.exists
 
-- name: git init in ~/{{ workspace_dir }} (case 3)
+- name: Git init in ~/{{ workspace_dir }} (case 3)
   ansible.builtin.command:
     cmd: git -C "{{ home_dir }}/{{ workspace_dir }}" init
   when: not workspace_git_stat.stat.exists

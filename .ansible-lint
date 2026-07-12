@@ -1,0 +1,32 @@
+---
+# .ansible-lint — lint policy for this repo.
+#
+# A full run found no actual defects: every waiver below is a deliberate,
+# documented convention of this codebase, so the linter is matched to it rather
+# than reformatting intentional code. Genuine issues are still fixed in code
+# (and rules that catch real risks, e.g. risky-file-permissions, stay active —
+# the one intentional exception carries an inline `# noqa`).
+#
+# Note: run with community.general resolvable (a full Ansible install, or
+# ANSIBLE_COLLECTIONS_PATH pointed at it), or homebrew_cask / git_config /
+# ini_file cannot be loaded for options validation.
+
+skip_list:
+  # Loop tasks carry a leading per-item label, e.g. "[{{ entry.tool }}] Wire …",
+  # so run output identifies the item. name[template] wants templates only at
+  # the end of a name.
+  - name[template]
+
+  # Git is driven through the git CLI on purpose: the repo's stance is
+  # non-destructive git (fetch / status / rev-parse, never reset --hard or
+  # force), which ansible.builtin.git cannot express safely. See AGENTS.md.
+  - command-instead-of-module
+
+  # `command -v <tool>` detection uses a shell builtin, so the shell module is
+  # required, not command; command-instead-of-shell misreads this as needless.
+  - command-instead-of-shell
+
+  # A couple of loop inputs align dict values into columns with extra spaces
+  # after a comma, for readability; yaml[commas] permits only one.
+  - yaml[commas]
+...
