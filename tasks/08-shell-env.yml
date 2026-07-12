@@ -1,28 +1,20 @@
 ---
 # 08-shell-env.yml — machine-local shell environment: ~/.local/bin on PATH, and
-# the GitHub Copilot CLI pointed at the shared AI hub. Both persist across shells
-# via idempotent blockinfile marker regions (not set once by Ansible), each with
-# a shell-side guard so the value never duplicates.
+# the GitHub Copilot CLI pointed at the shared AI hub. Both are plain shell env,
+# written to .zshenv (zsh) and .bashrc (bash) so they persist across shells and
+# take effect for EVERY zsh — login, interactive, and non-interactive alike, so
+# a tool that spawns a plain `zsh -c` still gets them. Not set once by Ansible;
+# each is an idempotent blockinfile marker region with a shell-side guard so the
+# value never duplicates across nested shells.
 #
-# The zsh file differs by purpose: PATH goes in .zprofile because macOS's
-# /etc/zprofile path_helper reorders PATH at login and would clobber it if set
-# earlier; COPILOT_CUSTOM_INSTRUCTIONS_DIRS is a plain variable, so it belongs in
-# .zshenv, which is sourced for EVERY zsh (login, interactive, non-interactive) —
-# the CLI then has it however its shell was started. bash uses .bashrc for both.
-#
-# Guarantees ~/.local/bin is on PATH.  That directory is the conventional
-# drop point for user-local binaries — pipx (hence Ansible), pass-cli on
-# Linux, `pip --user`, and many `curl | bash` installers (the Claude Code CLI
-# among them) place executables there but do NOT put it on PATH.  Without
-# this, those tools install successfully yet are "command not found" in a
-# fresh shell.
-#
-# Written to both zsh (macOS default) and bash (Linux default) startup files
-# so it takes effect whichever shell the operator lands in. Idempotent:
-# blockinfile manages a single marker-delimited region and rewrites it in
-# place, so re-running setup never duplicates lines.  The emitted snippet also
-# guards the export with a case match, so PATH does not accumulate duplicate
-# entries across nested/login shells either.
+# ~/.local/bin is the conventional drop point for user-local binaries — pipx
+# (hence Ansible), pass-cli on Linux, `pip --user`, and many `curl | bash`
+# installers (the Claude Code and Codex CLIs among them) place executables there
+# but do NOT put it on PATH, so without this they install yet are "command not
+# found". On macOS, /etc/zprofile's path_helper reorders PATH at login, so in a
+# login shell ~/.local/bin lands after the system paths — that shifts priority
+# only for a name it shares with a system/brew tool, not for the uniquely-named
+# AI CLIs.
 
 - name: Ensure ~/.local/bin is on PATH (zsh and bash startup files)
   ansible.builtin.blockinfile:
@@ -37,7 +29,7 @@
         *) export PATH="$HOME/.local/bin:$PATH" ;;
       esac
   loop:
-    - .zprofile
+    - .zshenv
     - .bashrc
 
 - name: Point the GitHub Copilot CLI at the shared AI hub (zsh and bash startup files)
