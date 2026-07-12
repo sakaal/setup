@@ -64,7 +64,8 @@
       - "SSH keypairs to deploy: {{ setup_ssh_titles | length }}"
       - "GitHub PAT present: {{ setup_github_pat_present }}"
       - "Ansible Vault password items: {{ setup_vault_pass_titles | length }} ({{ setup_vault_pass_titles | map('regex_replace', '^vault_pass-', '') | list }})"
-      - "Unknown items (will be ignored): {{ setup_unknown_titles | default([]) | length }}{{ ' — ' ~ setup_unknown_titles | join(', ') if setup_unknown_titles else '' }}"
+      - "Unknown items (will be ignored): {{ setup_unknown_titles | default([]) | length }}{{ ' — ' ~ setup_unknown_titles | join(', ')
+         if setup_unknown_titles else '' }}"
 
 - name: Warn on unrecognized items
   ansible.builtin.debug:
