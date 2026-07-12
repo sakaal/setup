@@ -370,6 +370,24 @@ handles content, 4 every stage that reads content into a model.
    precision for "owning organization" here: the operator can tell the
    organization from them.
 
+   *Generic words are not identifiers.* Splitting slugs and repo names
+   manufactures ordinary words as a side effect (a `…-release` repo yields the
+   token `release`); redacting those would reject legitimate general prose. A
+   split token is therefore *released* from the denylist when it is a known
+   common word — English (a vendored, integrity-pinned SCOWL list, extracted
+   lowercase-only so capitalized proper nouns are excluded) or a curated
+   software/DevOps term (cspell's `software-terms`, for protocol and tool names
+   such as `ssh`, `sdk`, `ansible`). This is a deliberate, bounded
+   under-redaction: distinctive project and organization names are absent from
+   those lists and stay redacted, and no list is a package registry or a
+   proper-noun dictionary of people/place/company names, whose coined names
+   share the identifier namespace. The residual — a token that is both a common
+   word and a name (a surname that is also a noun; a vendor name that occurs in
+   the tech vocabulary) — is released and caught, if it matters, by the
+   recurrence signal (7) and human review (12), per 5.c. The operator's own
+   git-config identity is exempt from this release and redacted
+   unconditionally, since a name that is also a word is still their name.
+
    **5.b) Substitution test.** An item must stay true and useful with its
    identifiers stripped; only the abstract residue is carried forward, and the
    identifiers never reach the output. Promoted statements are written in the

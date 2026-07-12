@@ -42,6 +42,7 @@
 import base64
 import binascii
 import glob
+import gzip
 import hashlib
 import json
 import os
@@ -315,14 +316,110 @@ def sanitize(data):
 
 # ── Identifier denylist (§7 req 5.a; deterministic, from machine state) ────
 
-# Generic path/dev words that would over-match as identifiers if denylisted.
-# No operator-specific handle here — the operator's name/handle is added at
-# runtime from git config (git_identity_tokens), not hardcoded (invariant 5).
-COMMON_PATH_TOKENS = {"users", "home", "workspace", "documents", "var",
-                      "private", "tmp", "projects", "repos", "src", "code",
-                      "main", "master", "app", "api", "web", "lib", "core",
-                      "common", "docs", "test", "tests", "config", "dev",
-                      "prod", "staging", ""}
+# Generic-word screen. The denylist is built by splitting the operator's own
+# slugs, repo names, and git remotes into tokens; a token that is an ordinary
+# known word is not an identifier and must not be redacted, or general prose
+# ("release", "identity", "ssh", "http") would be wrongly rejected. Two curated
+# word sets are released from redaction, replacing a hand-maintained stop-list
+# that could never cover the space:
+#   1. SCOWL English words (basis of GNU Aspell and the Unix `words` packages;
+#      see ai-wordlist.NOTICE) — a vendored .gz, pinned by sha256 and integrity-
+#      checked. Only lowercase-canonical entries are vendored, which drops
+#      SCOWL's capitalized proper nouns (personal, place, company names); the
+#      .gz is built `gzip -n` so the pin is reproducible from the plaintext.
+#   2. Technical known-terms (ai-terms.txt) — software/DevOps terms and acronyms
+#      (ssh, sdk, ansible, docker, ldap, json…) from cspell's curated
+#      `software-terms` dictionary (MIT). A small vendored, git-reviewed
+#      plaintext file. Dedicated proper-noun dictionaries (people/place/company
+#      names) and package registries are excluded, as their coined names share
+#      the identifier namespace.
+# Residual (accepted, §7 req 5.c — recurrence + human review): a few dual-use
+# tokens are both a common word and a name (a surname that is also a noun; a
+# vendor name that appears in the tech vocabulary) and are released. The
+# operator's OWN identity is exempt from the screen: build_denylist redacts the
+# git-config name/handle unconditionally, since a name that is also a word is
+# still the operator's name. No identity is hardcoded (invariant 5).
+WORDLIST_SHA256 = "1a57abaa8a195687332d39c2c0719a47dd9c44f71ad6c62b56110b0eec09f118"
+_WORDS = None
+
+
+def _wordlist_path():
+    """Resolve the English wordlist and whether to verify it against
+    WORDLIST_SHA256. An explicit AI_DISTILL_WORDLIST override is operator trust
+    — loaded as-is, unverified. The auto-resolved vendored copies are pinned
+    (tamper-evident). A system dictionary is a degraded, unverified fallback."""
+    env = os.environ.get("AI_DISTILL_WORDLIST")
+    if env and os.path.isfile(env):
+        return env, False
+    here = os.path.dirname(os.path.realpath(__file__))
+    for cand in (os.path.join(here, "ai-wordlist.txt.gz"),
+                 os.path.join(HOME, ".local", "share", "ai", "wordlist.txt.gz")):
+        if os.path.isfile(cand):
+            return cand, True
+    if os.path.isfile("/usr/share/dict/words"):
+        return "/usr/share/dict/words", False
+    return None, False
+
+
+def _load_english():
+    path, verify = _wordlist_path()
+    if not path:
+        sys.stderr.write("! no English wordlist found (looked for a vendored"
+                         " ai-wordlist.txt.gz and /usr/share/dict/words); the"
+                         " identifier screen will over-redact common words\n")
+        return set()
+    try:
+        with open(path, "rb") as fh:
+            raw = fh.read()
+        if path.endswith(".gz"):
+            if verify:
+                got = hashlib.sha256(raw).hexdigest()
+                if got != WORDLIST_SHA256:      # tamper on the pinned artifact
+                    sys.stderr.write("✗ wordlist integrity check failed for %s\n"
+                                     "  expected %s\n  got      %s\n"
+                                     % (path, WORDLIST_SHA256, got))
+                    sys.exit(1)
+            text = gzip.decompress(raw).decode("utf-8", "replace")
+        else:
+            text = raw.decode("utf-8", "replace")
+    except (OSError, gzip.BadGzipFile, UnicodeDecodeError) as exc:
+        # A pinned artifact never reaches here (a bad hash exits above); this is
+        # a corrupt/unreadable override or system dictionary — degrade to
+        # over-redaction rather than abort the run.
+        sys.stderr.write("! could not read wordlist %s (%s); the identifier"
+                         " screen will over-redact common words\n" % (path, exc))
+        return set()
+    return {w.strip().lower() for w in text.splitlines() if w.strip()}
+
+
+def _load_terms():
+    """Technical known-terms (ai-terms.txt), a git-reviewed plaintext layer —
+    trusted like the code that ships with it, so no separate hash pin. Comment
+    (#) and blank lines are ignored. Absent file → no extra terms."""
+    here = os.path.dirname(os.path.realpath(__file__))
+    for path in (os.path.join(here, "ai-terms.txt"),
+                 os.path.join(HOME, ".local", "share", "ai", "terms.txt")):
+        if os.path.isfile(path):
+            with open(path, encoding="utf-8") as fh:
+                return {ln.strip().lower() for ln in fh
+                        if ln.strip() and not ln.startswith("#")}
+    return set()
+
+
+def dictionary_words():
+    """The released known-word set: the union of the English wordlist (SCOWL)
+    and the technical known-terms (ai-terms.txt). Built once and cached; a token
+    in it is a common word, not an operator identifier, and is not redacted."""
+    global _WORDS
+    if _WORDS is None:
+        _WORDS = frozenset(_load_english() | _load_terms())
+    return _WORDS
+
+
+def is_identifier_token(tok):
+    """A token worth redacting: longer than two characters and not a dictionary
+    word — a common word is not the operator's identifier (§7 req 5.a)."""
+    return len(tok) > 2 and tok.lower() not in dictionary_words()
 
 
 def slug_tokens(slug):
@@ -330,7 +427,7 @@ def slug_tokens(slug):
     if slug:
         toks.add(slug)
         for part in re.split(r"[-/_.\s]+", slug):
-            if part and part.lower() not in COMMON_PATH_TOKENS and len(part) > 2:
+            if part and is_identifier_token(part):
                 toks.add(part)
     return toks
 
@@ -357,10 +454,11 @@ def git_remote_identifiers(repo_dir):
 
 
 def git_identity_tokens():
-    """Operator identity from git config — name parts and the email local
-    part — so a personal name is redacted before promotion without hardcoding
-    it here (portable to any operator). Kept only in the local denylist,
-    never committed."""
+    """Operator identity from git config — name parts and the email local part —
+    so a personal name is redacted before promotion without hardcoding it here
+    (portable to any operator). Not dictionary-screened: build_denylist redacts
+    these unconditionally, since a name that is also a common word is still the
+    operator's name. Kept only in the local denylist, never committed."""
     toks = set()
     for key in ("user.name", "user.email"):
         try:
@@ -374,27 +472,27 @@ def git_identity_tokens():
         if "@" in val:
             val = val.split("@", 1)[0]
         for part in re.split(r"[-._\s]+", val):
-            if len(part) > 2 and part.lower() not in COMMON_PATH_TOKENS:
+            if len(part) > 2:
                 toks.add(part)
     return toks
 
 
 def build_denylist(slugs):
+    # Path/repo/remote tokens: dictionary-screened, so an ordinary word among
+    # them (e.g. "release", "main") is released rather than redacted.
     toks = set()
     for slug in slugs:
         toks |= slug_tokens(slug)
-    toks |= git_identity_tokens()
     if os.path.isdir(WORKSPACE_DIR):
         for name in sorted(os.listdir(WORKSPACE_DIR)):
             repo = os.path.join(WORKSPACE_DIR, name)
             if os.path.isdir(os.path.join(repo, ".git")):
                 toks.add(name)
                 toks |= git_remote_identifiers(repo)
-    # Single filter over the whole union — every source (slugs, identity,
-    # repo names, remotes) is screened the same way, so no source can slip a
-    # generic word like "main" or "app" into the denylist.
-    return sorted(t for t in toks
-                  if len(t) > 2 and t.lower() not in COMMON_PATH_TOKENS)
+    screened = {t for t in toks if is_identifier_token(t)}
+    # The operator's own identity is redacted unconditionally — exempt from the
+    # generic-word screen, since a name that is also a word is still their name.
+    return sorted(screened | git_identity_tokens())
 
 
 def scan_identifiers(text, denylist):
