@@ -92,7 +92,7 @@ SETUP_DIR=~/workspace/setup /bin/bash -c "$(curl -fsSL https://raw.githubusercon
 Multiple environment variables combine space-separated on the same line:
 
 ```sh
-SETUP_DIR=~/workspace/setup SETUP_REF=v2.3.0 /bin/bash -c "$(curl -fsSL https://raw.githubusercontent.com/sakaal/setup/master/setup.sh)"
+SETUP_DIR=~/workspace/setup SETUP_REF=v2.4.0 /bin/bash -c "$(curl -fsSL https://raw.githubusercontent.com/sakaal/setup/master/setup.sh)"
 ```
 
 ### Pinning to a release tag
@@ -102,7 +102,7 @@ and re-executes from the clone, so everything past the initial
 bootstrap runs the pinned version:
 
 ```sh
-SETUP_REF=v2.3.0 /bin/bash -c "$(curl -fsSL https://raw.githubusercontent.com/sakaal/setup/master/setup.sh)"
+SETUP_REF=v2.4.0 /bin/bash -c "$(curl -fsSL https://raw.githubusercontent.com/sakaal/setup/master/setup.sh)"
 ```
 
 The ref in the URL (`master` above) selects only the entry script
@@ -111,7 +111,7 @@ alone still installs `master`. For an end-to-end pin, including the
 entry script, set both to the same tag:
 
 ```sh
-SETUP_REF=v2.3.0 /bin/bash -c "$(curl -fsSL https://raw.githubusercontent.com/sakaal/setup/v2.3.0/setup.sh)"
+SETUP_REF=v2.4.0 /bin/bash -c "$(curl -fsSL https://raw.githubusercontent.com/sakaal/setup/v2.4.0/setup.sh)"
 ```
 
 Tags are immutable refs. When a release is GPG-signed, you can
