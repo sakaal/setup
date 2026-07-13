@@ -9,16 +9,19 @@
 # this public repo names the fields, never their contents. Per-entry clone
 # behavior:
 #
-#   target absent              → clone (using `version` if specified,
-#                                 else the remote's default branch)
-#   target is a git repo,
-#     remote matches manifest  → skip silently (already done)
-#   target is a git repo,
-#     remote differs           → log a warning, skip (don't clobber)
+#   target absent              → clone; on failure (unreachable / off VPN /
+#                                 bad URL) leave a stub (git repo, origin set,
+#                                 no content) — never fatal
+#   git repo, remote matches,
+#     populated                → skip silently (already done)
+#   git repo, remote matches,
+#     empty stub               → try to complete it (fetch + checkout); non-fatal
+#   git repo, remote differs   → log a warning, skip (don't clobber)
 #   target dir exists, no .git → log a warning, skip (don't clobber)
 #
-# Per safe-idempotent stance, only the "absent → clone" case takes
-# any action. All other cases preserve existing local state.
+# Fetching is best-effort: a failed clone or fetch never stops the bootstrap —
+# the repo is left as a stub and completed by a later run with the same
+# manifest. Existing populated clones are otherwise left untouched.
 
 - name: Stat ~/{{ workspace_dir }}/workspace.repos
   ansible.builtin.stat:
