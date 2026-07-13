@@ -101,7 +101,8 @@
       {"tool": "claude-code", "scope": "user", "class": "memory-global", "refinement": "derived", "path": "~/.claude/memory", "note": "Cross-repo memory; same harvest treatment."},
       {"tool": "claude-code", "scope": "user", "class": "memory-global", "refinement": "meta", "path": "~/.claude/memory/MEMORY.md", "note": "Cross-repo memory index; same meta treatment as the per-project index."},
       {"tool": "claude-code", "scope": "user", "class": "history", "refinement": "raw", "path": "~/.claude/history.jsonl", "note": "Prompt/command history; mostly operator-typed, raw upstream of memory. Mine and distil, never push."},
-      {"tool": "claude-code", "scope": "user:path", "class": "transcripts", "refinement": "raw", "path": "~/.claude/projects/{slug}/*.jsonl", "note": "Session transcript .jsonl files (sibling to the memory/ dir); richest harvest source."}
+      {"tool": "claude-code", "scope": "user:path", "class": "transcripts", "refinement": "raw", "path": "~/.claude/projects/{slug}/*.jsonl", "note": "Session transcript .jsonl files (sibling to the memory/ dir); richest harvest source."},
+      {"tool": "github-copilot", "scope": "user", "class": "sessions", "refinement": "raw", "path": "~/.copilot/session-store.db", "note": "Raw session logs — the SQLite store of Copilot CLI conversation turns (they live here, not in session-state/: an empty session leaves session-state/<id>/ bare). Binary, so ai-harvest catalogs it by path+hash and the distiller opens it read-only; live writes buffer in the -wal sidecar, so checkpoint/hash at rest. Copilot keeps no curated-memory surface, so this is its only harvest source — mine and distil, never push."}
     ],
 
     "non-reusable": [
@@ -110,7 +111,7 @@
       {"tool": "openai-codex", "scope": "user", "class": "other", "path": "~/.codex/**"},
       {"tool": "gemini-cli", "scope": "user", "class": "other", "path": "~/.gemini/**"},
       {"tool": "cursor", "scope": "user", "class": "other", "path": "~/.cursor/**"},
-      {"tool": "github-copilot", "scope": "user", "class": "other", "path": "~/.copilot/**", "note": "Tool-managed state: config.json, installed plugins, sessions, session-store.db, logs, ide integration, and auth — everything under ~/.copilot except the mcp-config.json and skills carved out in distribute."}
+      {"tool": "github-copilot", "scope": "user", "class": "other", "path": "~/.copilot/**", "note": "Tool-managed state: config.json, installed plugins, session-state/ scratch (checkpoints, pulled-in files, research), the -wal/-shm sidecars, logs, ide integration, and auth — everything under ~/.copilot except the mcp-config.json and skills carved out in distribute and the session-store.db carved out in harvest."}
     ]
   }
 }
