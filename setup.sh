@@ -516,6 +516,29 @@ case "$PLATFORM" in
     ;;
 esac
 
+# ── pass-cli C-library pre-check (Linux) ──────────────────────────
+#
+# Proton's pass-cli is a prebuilt binary linked against a fairly recent glibc.
+# On a Linux system whose glibc is older than it needs, the binary can't run —
+# so rather than fail, warn and skip credential provisioning (Proton Pass
+# discovery, SSH keys, tokens, vault); the rest of setup still runs. macOS uses
+# a Homebrew build and is unaffected.
+SKIP_CREDENTIALS=false
+PASS_CLI_MIN_GLIBC=2.29   # bump if Proton raises the floor
+
+glibc_version() { ldd --version 2>/dev/null | head -1 | grep -oE '[0-9]+\.[0-9]+' | tail -1; }
+ver_ge() { [[ "$(printf '%s\n%s\n' "$1" "$2" | sort -V | tail -1)" == "$1" ]]; }
+
+if [[ "$PLATFORM" == linux ]]; then
+  _glibc="$(glibc_version)"
+  if [[ -n "$_glibc" ]] && ! ver_ge "$_glibc" "$PASS_CLI_MIN_GLIBC"; then
+    SKIP_CREDENTIALS=true
+    warn "System C library (glibc $_glibc) is older than the Proton pass-cli binary needs."
+    warn "Skipping credential provisioning from Proton Pass; the rest of setup still runs."
+    warn "To provision credentials too, run setup on a more recent OS distribution version."
+  fi
+fi
+
 # User-local binaries (pipx apps, pass-cli) install into ~/.local/bin. Put it
 # on PATH for the rest of THIS run so freshly-installed tools resolve; stage
 # 08 persists it for future shells.
@@ -532,12 +555,14 @@ case "$PLATFORM" in
 esac
 
 ensure_gh
-ensure_pass_cli
+$SKIP_CREDENTIALS || ensure_pass_cli
 ensure_ansible
 
 # ── Proton Pass authentication ────────────────────────────────────
 
-if pass-cli vault list --output json >/dev/null 2>&1; then
+if $SKIP_CREDENTIALS; then
+  info "Skipping Proton Pass login (credential provisioning disabled)."
+elif pass-cli vault list --output json >/dev/null 2>&1; then
   ok "Proton Pass session active"
 else
   info "Logging in to Proton Pass (interactive)..."
@@ -552,6 +577,12 @@ fi
 info "Running setup playbook..."
 ok "Workspace repo: $WORKSPACE_REPO"
 ANSIBLE_ARGS=(-i hosts.yml setup.yml -e "workspace_repo=$WORKSPACE_REPO")
+# When the C-library pre-check disabled credentials, tell the playbook to skip
+# its credential stages (discovery, SSH keys, GitHub PAT, vault password).
+if $SKIP_CREDENTIALS; then
+  ANSIBLE_ARGS+=(-e skip_credentials=true)
+  info "Credential stages will be skipped (incompatible C library)."
+fi
 # Optional override of the local workspace directory name (default: the repo
 # basename, derived in setup.yml). Must be a plain name — it becomes ~/<name>.
 WORKSPACE_DIR="${WORKSPACE_DIR:-}"

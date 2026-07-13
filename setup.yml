@@ -39,21 +39,29 @@
           e.g. …/my-projects.git.
       tags: [always]
 
+    # Credential stages (01–04) source everything from Proton Pass via pass-cli.
+    # setup.sh sets skip_credentials=true when that binary can't run here (e.g.
+    # the C library is too old), so these stages are skipped and the rest of the
+    # playbook still runs. `when: false` skips even the always-tagged discovery.
     - name: Discover Setup Keys items
       ansible.builtin.import_tasks: tasks/01-discover.yml
       tags: [discover, always]
+      when: not (skip_credentials | default(false) | bool)
 
     - name: Deploy SSH keypairs
       ansible.builtin.import_tasks: tasks/02-ssh-keys.yml
       tags: [ssh]
+      when: not (skip_credentials | default(false) | bool)
 
     - name: Deploy GitHub PAT
       ansible.builtin.import_tasks: tasks/03-github-pat.yml
       tags: [github]
+      when: not (skip_credentials | default(false) | bool)
 
     - name: Deploy Ansible Vault password identity
       ansible.builtin.import_tasks: tasks/04-vault-password.yml
       tags: [ansible-vault]
+      when: not (skip_credentials | default(false) | bool)
 
     - name: Configure local git settings
       ansible.builtin.import_tasks: tasks/05-git-config.yml
