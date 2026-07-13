@@ -392,27 +392,35 @@ ensure_pipx() {
   ok "pipx installed"
 }
 
-# ensure_ansible — install Ansible via pipx on both platforms. --include-deps
-# is required: ansible's console scripts (ansible-playbook, ansible-vault, …)
-# are provided by its ansible-core dependency, so without it pipx exposes no
-# commands. The top-level `ansible` package bundles community.general
-# (git_config, ini_file), which the playbook uses.
+# ensure_ansible — provide a self-contained Ansible via pipx and expose its
+# path as $ANSIBLE_PLAYBOOK for the handoff. We deliberately do NOT reuse
+# whatever `ansible-playbook` happens to be first on PATH: on a developer box
+# that is often a pyenv/conda shim or a bare distro ansible-core with no
+# collections, which fails to load community.general (git_config, ini_file) —
+# a hard error at play-load time, even for stages that are skipped. The pipx
+# `ansible` package (installed with --include-deps for its console scripts)
+# bundles those collections inside its own venv, independent of PATH, the
+# user's collection paths, and any other Python on the machine.
 ensure_ansible() {
-  if command -v ansible-playbook >/dev/null 2>&1; then
-    ok "ansible present"
+  if pipx list --short 2>/dev/null | grep -q '^ansible '; then
+    ok "ansible (pipx) present"
     if $UPGRADE; then
       info "Upgrading ansible..."
       run pipx upgrade ansible || warn "ansible: pipx upgrade failed (continuing)"
     fi
-    return 0
-  fi
-  info "Installing ansible via pipx..."
-  if run pipx install --include-deps ansible; then
-    hash -r 2>/dev/null || true
-    ok "ansible installed"
   else
-    fail "ansible install via pipx failed"
+    info "Installing ansible via pipx..."
+    if run pipx install --include-deps ansible; then
+      hash -r 2>/dev/null || true
+      ok "ansible installed"
+    else
+      fail "ansible install via pipx failed"
+    fi
   fi
+  # Invoke this ansible by explicit path so PATH shims can't shadow it.
+  ANSIBLE_PLAYBOOK="$HOME/.local/bin/ansible-playbook"
+  $DRY_RUN || [[ -x "$ANSIBLE_PLAYBOOK" ]] \
+    || fail "pipx ansible-playbook not found at $ANSIBLE_PLAYBOOK"
 }
 
 # ensure_gh — GitHub CLI. brew on macOS; distro package (via the official
@@ -595,9 +603,9 @@ esac
 if $DRY_RUN; then
   ANSIBLE_ARGS+=(--check)
 fi
-if $DRY_RUN && ! command -v ansible-playbook >/dev/null 2>&1; then
-  info "(dry-run) Would: ansible-playbook ${ANSIBLE_ARGS[*]}"
-elif ! ansible-playbook "${ANSIBLE_ARGS[@]}"; then
+if $DRY_RUN && [[ ! -x "$ANSIBLE_PLAYBOOK" ]]; then
+  info "(dry-run) Would: $ANSIBLE_PLAYBOOK ${ANSIBLE_ARGS[*]}"
+elif ! "$ANSIBLE_PLAYBOOK" "${ANSIBLE_ARGS[@]}"; then
   fail "ansible-playbook failed; setup.sh halted before completing"
 fi
 
