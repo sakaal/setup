@@ -141,7 +141,7 @@
     - name: "[{{ manifest_entry.key }}] Fetch + checkout to complete the stub"
       ansible.builtin.shell:
         cmd: |
-          set -e
+          set -euo pipefail
           d="{{ home_dir }}/{{ workspace_dir }}/{{ manifest_entry.key }}"
           git -C "$d" fetch --quiet origin
           b="$(git -C "$d" remote show origin | sed -n 's/.*HEAD branch: //p')"
