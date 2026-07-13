@@ -10,18 +10,15 @@
 # behavior:
 #
 #   target absent              → clone; on failure (unreachable / off VPN /
-#                                 bad URL) leave a stub (git repo, origin set,
-#                                 no content) — never fatal
-#   git repo, remote matches,
-#     populated                → skip silently (already done)
-#   git repo, remote matches,
-#     empty stub               → try to complete it (fetch + checkout); non-fatal
+#                                 bad URL) non-fatal — nothing is written, so a
+#                                 later run retries from the same manifest
+#   git repo, remote matches   → skip silently (already done)
 #   git repo, remote differs   → log a warning, skip (don't clobber)
 #   target dir exists, no .git → log a warning, skip (don't clobber)
 #
-# Fetching is best-effort: a failed clone or fetch never stops the bootstrap —
-# the repo is left as a stub and completed by a later run with the same
-# manifest. Existing populated clones are otherwise left untouched.
+# Cloning is best-effort: a failed clone never stops the bootstrap, and git
+# removes the partial checkout so no on-disk state is left to reconcile.
+# Existing clones are left untouched.
 
 - name: Stat ~/{{ workspace_dir }}/workspace.repos
   ansible.builtin.stat:

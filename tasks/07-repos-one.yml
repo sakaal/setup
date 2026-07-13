@@ -3,18 +3,17 @@
 # from 07-repos.yml. manifest_entry has .key (local dir name) and
 # .value (vcstool entry: type, url, optional version, optional config.user).
 #
-# Fetching is best-effort and never fatal: an unreachable remote (off VPN,
-# host down, bad URL) must not stop the bootstrap. A repo that cannot be cloned
-# is left as a *stub* — a git repo with origin set to the configured URL but no
-# content — so a later re-run (or a manual `git pull`) completes it from the
-# same manifest once the remote is reachable.
+# Cloning is best-effort and never fatal: an unreachable remote (off VPN, host
+# down, bad URL) must not stop the bootstrap. A failed clone leaves nothing on
+# disk — git removes the partial checkout it created — so the target is simply
+# still absent, and a later run retries the clone from the same manifest once
+# the remote is reachable. No on-disk state to reconcile.
 #
 # Classifications and actions:
-#   absent                     → clone; on failure leave a stub (init + origin)
-#   git, remote ok, populated  → skip (already done)
-#   git, remote ok, empty stub → try to complete (fetch + checkout); non-fatal
-#   git, remote differs        → warning, skip (don't clobber)
-#   non-git dir                → warning, skip (don't clobber)
+#   absent              → clone; a failed clone is non-fatal (retried next run)
+#   git, remote ok      → skip (already done)
+#   git, remote differs → warning, skip (don't clobber)
+#   non-git dir         → warning, skip (don't clobber)
 
 - name: "[{{ manifest_entry.key }}] Stat target dir"
   ansible.builtin.stat:
@@ -30,16 +29,6 @@
   ansible.builtin.command:
     cmd: git -C "{{ home_dir }}/{{ workspace_dir }}/{{ manifest_entry.key }}" remote get-url origin
   register: target_origin
-  changed_when: false
-  failed_when: false
-  when: target_git.stat.exists
-
-# Distinguish a populated clone from an empty stub (a repo with origin set but
-# no commit yet — left by a prior run whose clone couldn't reach the remote).
-- name: "[{{ manifest_entry.key }}] Check whether the repo has any commit (when .git exists)"
-  ansible.builtin.command:
-    cmd: git -C "{{ home_dir }}/{{ workspace_dir }}/{{ manifest_entry.key }}" rev-parse --verify -q HEAD
-  register: target_head
   changed_when: false
   failed_when: false
   when: target_git.stat.exists
@@ -96,71 +85,35 @@
     - not target_git.stat.exists
 
 # absent → clone. Tolerant: a failed clone (unreachable, off VPN, bad URL) must
-# not stop the bootstrap, so on failure we leave a stub — a git repo with origin
-# set to the configured URL — that a later run completes.
-- name: "[{{ manifest_entry.key }}] Clone, or leave a stub on failure (target absent)"
+# not stop the bootstrap. `failed_when: false` keeps it non-fatal; git removes
+# the partial checkout on failure, so nothing is left to reconcile and a later
+# run — with the remote reachable — retries the clone from the same manifest.
+- name: "[{{ manifest_entry.key }}] Clone (target absent; non-fatal if unreachable)"
+  ansible.builtin.git:
+    repo: "{{ manifest_entry.value.url }}"
+    dest: "{{ home_dir }}/{{ workspace_dir }}/{{ manifest_entry.key }}"
+    version: "{{ manifest_entry.value.version | default(omit) }}"
+    update: false
+    clone: true
+  register: repo_clone
+  failed_when: false
   when: not target_dir.stat.exists
-  block:
-    - name: "[{{ manifest_entry.key }}] Clone (target absent)"
-      ansible.builtin.git:
-        repo: "{{ manifest_entry.value.url }}"
-        dest: "{{ home_dir }}/{{ workspace_dir }}/{{ manifest_entry.key }}"
-        version: "{{ manifest_entry.value.version | default(omit) }}"
-        update: false
-        clone: true
-  rescue:
-    - name: "[{{ manifest_entry.key }}] Clone failed — leaving a stub (remote unreachable?)"
-      ansible.builtin.debug:
-        msg: |
-          [{{ manifest_entry.key }}] clone of {{ manifest_entry.value.url }} failed
-          (remote unreachable, off VPN, or bad URL). Leaving a stub with origin set;
-          a later setup run — or `git -C ~/{{ workspace_dir }}/{{ manifest_entry.key }} pull`
-          once reachable — completes it. Continuing.
-    # Local-only: git init + remote set/add never fail for the failure modes
-    # this tolerates (network / bad URL); git records any URL string verbatim.
-    - name: "[{{ manifest_entry.key }}] Create/keep a stub with origin set"
-      ansible.builtin.shell:
-        cmd: |
-          set -e
-          d="{{ home_dir }}/{{ workspace_dir }}/{{ manifest_entry.key }}"
-          mkdir -p "$d"
-          git -C "$d" rev-parse --git-dir >/dev/null 2>&1 || git -C "$d" init -q
-          git -C "$d" remote set-url origin "{{ manifest_entry.value.url }}" 2>/dev/null \
-            || git -C "$d" remote add origin "{{ manifest_entry.value.url }}"
-        executable: /bin/bash
-      changed_when: true
 
-# git, remote ok, empty stub → try to complete it. Non-fatal: still unreachable
-# leaves the stub for the next run.
-- name: "[{{ manifest_entry.key }}] Complete an empty stub (fetch + checkout)"
-  when:
-    - target_git.stat.exists
-    - remote_ok | default(false)
-    - target_head.rc | default(1) != 0
-  block:
-    - name: "[{{ manifest_entry.key }}] Fetch + checkout to complete the stub"
-      ansible.builtin.shell:
-        cmd: |
-          set -euo pipefail
-          d="{{ home_dir }}/{{ workspace_dir }}/{{ manifest_entry.key }}"
-          git -C "$d" fetch --quiet origin
-          b="$(git -C "$d" remote show origin | sed -n 's/.*HEAD branch: //p')"
-          [ -n "$b" ] || b=main
-          git -C "$d" checkout -B "$b" "origin/$b"
-        executable: /bin/bash
-      changed_when: true
-  rescue:
-    - name: "[{{ manifest_entry.key }}] Still unreachable — stub kept"
-      ansible.builtin.debug:
-        msg: >-
-          [{{ manifest_entry.key }}] stub could not be completed (remote still
-          unreachable). Left as-is; re-run when reachable. Continuing.
+# The clone runs with failed_when:false, so a failure surfaces as a non-zero
+# rc (the module sets rc only on failure), not as a failed task.
+- name: "[{{ manifest_entry.key }}] Clone failed — left absent (remote unreachable?)"
+  ansible.builtin.debug:
+    msg: >-
+      [{{ manifest_entry.key }}] clone of {{ manifest_entry.value.url }} failed
+      (remote unreachable, off VPN, or bad URL). Nothing was written; a later
+      setup run retries it once reachable. Continuing.
+  when: repo_clone.rc | default(0) != 0
 
 # Optional per-repo config.user → this repo's *local* git identity, letting a
 # single repo override the global default (e.g. a client-specific identity).
-# Applied to any repo we now own — freshly cloned, a stub we just created, an
-# existing stub, or an already-present matching clone; a skipped/foreign dir is
-# left alone. Each field under config.user maps to user.<field>.
+# Applied to any repo we own — one we just cloned, or an already-present clone
+# whose remote matches; a foreign dir, a differing remote, or a clone that just
+# failed is left alone. Each field under config.user maps to user.<field>.
 - name: "[{{ manifest_entry.key }}] Resolve per-repo identity (may be empty)"
   ansible.builtin.set_fact:
     repo_user: "{{ (manifest_entry.value.config | default({})).user | default({}) }}"
@@ -176,6 +129,7 @@
     label: "user.{{ item.key }}"
   when:
     - repo_user | length > 0
-    - (not target_dir.stat.exists) or (target_git.stat.exists and (remote_ok | default(false)))
+    - (target_git.stat.exists and (remote_ok | default(false)))
+      or ((not target_dir.stat.exists) and (repo_clone.rc | default(0) == 0))
 
 ...
