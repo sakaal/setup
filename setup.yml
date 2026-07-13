@@ -17,8 +17,11 @@
     # highest precedence) from its optional positional argument; the default
     # here is what a direct `ansible-playbook` invocation gets.
     workspace_repo: "git@github.com:sakaal/workspace.git"
-    # Directory under $HOME where the workspace repo lands: its basename
-    # minus .git, like `git clone`. Derived; not a user-facing setting.
+    # Directory under $HOME where the workspace repo lands. Defaults to the
+    # repo's basename (minus .git, like `git clone`); override with
+    # `-e workspace_dir=<name>` (setup.sh exposes this as the WORKSPACE_DIR
+    # env var) when the remote repo's name can't be your preferred local
+    # directory name. Extra-vars outrank this play var, so the override wins.
     workspace_dir: >-
       {{ workspace_repo
          | regex_replace('/+$', '')

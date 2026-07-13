@@ -113,6 +113,14 @@ goes after a `$0` placeholder: `… setup.sh)" setup <repo>`. Stage 06 normalize
 both the desired repo and any existing origin to `host/owner/repo` before
 comparing, so the trust/halt decision is transport-agnostic.
 
+The landing directory name defaults to the repo basename but is overridable via
+the `WORKSPACE_DIR` env var, passed through as the `workspace_dir` extra-var
+(outranking the derived play var) — for when the remote's repo name can't be the
+desired local dir (e.g. a Bitbucket slug checked out as `~/projects`). It must
+be a plain name and set on every run, since `workspace_dir` is what every path
+is built from; renaming the directory after cloning breaks idempotency (a re-run
+recreates the basename dir), so the override is the supported way to diverge.
+
 **Why git clone (after CLT) and not curl + tar**: the install must be a real git
 working tree so `git pull`, `git status`, and `git tag --verify` work as
 standard operations. The entry transport is curl (so the one-liner needs no

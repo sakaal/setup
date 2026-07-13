@@ -63,6 +63,22 @@ Any transport git understands works — SSH (`git@host:owner/repo.git`) or
 HTTPS. The bootstrap assumes your git/SSH client is already configured to
 reach it; it just hands git the reference.
 
+### Choosing the workspace directory name
+
+By default the workspace lands at `~/<repo-basename>/`. When the remote's name
+can't be the local directory name you want — e.g. a Bitbucket slug like
+`projects-sakari.maaranen` that you'd rather have as `~/projects` — set
+`WORKSPACE_DIR` to the directory name:
+
+```sh
+WORKSPACE_DIR=projects /bin/bash -c "$(curl -fsSL https://raw.githubusercontent.com/sakaal/setup/master/setup.sh)" setup git@bitbucket.example.com:you/projects-sakari.maaranen.git
+```
+
+It must be a plain directory name (no slashes) and passed on every run: it
+decides where setup looks for the workspace, so idempotency depends on it.
+Don't rename the directory after cloning — a later run would recreate the
+basename directory and drift; set `WORKSPACE_DIR` instead.
+
 ### Choosing the install location
 
 The one-liner installs its clone to `~/setup`. If that path is already

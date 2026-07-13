@@ -31,6 +31,14 @@
 # git/SSH is already set up to reach it. Through the curl one-liner, pass it
 # after a $0 placeholder:
 #   /bin/bash -c "$(curl -fsSL …/setup.sh)" setup https://github.com/you/workspace.git
+#
+# WORKSPACE_DIR (env): check the workspace out at ~/<WORKSPACE_DIR>/ instead of
+# the repo basename — for when the remote's repo name can't be your preferred
+# local directory name (e.g. a Bitbucket slug projects-sakari.maaranen you want
+# as ~/projects). Must be a plain directory name (no slashes) and set on every
+# run: it decides where setup looks for the workspace, so idempotency depends on
+# it. Don't rename the directory after cloning — set WORKSPACE_DIR instead, or a
+# re-run recreates the basename directory and drifts.
 
 set -uo pipefail
 
@@ -102,6 +110,13 @@ Environment variables:
   SETUP_DIR   Where the one-liner installs its clone (default: ~/setup).
               Ignored when running from an existing working copy.
   SETUP_REF   Git ref to clone when self-bootstrapping (default: master)
+  WORKSPACE_DIR
+              Local directory name for the workspace, under ~/ (default: the
+              workspace repo's basename). Use when the remote repo name can't
+              be your preferred local dir — e.g. a Bitbucket slug
+              projects-sakari.maaranen checked out as ~/projects. Must be a
+              plain name (no slashes) and passed on every run: it decides
+              where setup looks for the workspace, so idempotency depends on it.
 EOF
 }
 
@@ -537,6 +552,15 @@ fi
 info "Running setup playbook..."
 ok "Workspace repo: $WORKSPACE_REPO"
 ANSIBLE_ARGS=(-i hosts.yml setup.yml -e "workspace_repo=$WORKSPACE_REPO")
+# Optional override of the local workspace directory name (default: the repo
+# basename, derived in setup.yml). Must be a plain name — it becomes ~/<name>.
+WORKSPACE_DIR="${WORKSPACE_DIR:-}"
+case "$WORKSPACE_DIR" in
+  '')       : ;;  # unset — setup.yml derives it from the repo basename
+  .|..|*/*) fail "WORKSPACE_DIR must be a plain directory name (no '/', not '.'/'..'): '$WORKSPACE_DIR'" ;;
+  *)        ANSIBLE_ARGS+=(-e "workspace_dir=$WORKSPACE_DIR")
+            ok "Workspace dir: ~/$WORKSPACE_DIR (override)" ;;
+esac
 if $DRY_RUN; then
   ANSIBLE_ARGS+=(--check)
 fi
