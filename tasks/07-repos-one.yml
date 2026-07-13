@@ -1,7 +1,7 @@
 ---
 # 07-repos-one.yml — process a single manifest entry. Loop body called
 # from 07-repos.yml. manifest_entry has .key (local dir name) and
-# .value (vcstool entry: type, url, optional version).
+# .value (vcstool entry: type, url, optional version, optional config.user).
 #
 # Classifications and actions:
 #   absent             → clone
@@ -86,5 +86,27 @@
     update: false
     clone: true
   when: not target_dir.stat.exists
+
+# Optional per-repo config.user → this repo's *local* git identity, letting a
+# single repo override the global default (e.g. a client-specific identity).
+# Applied only when the target is a repo we own — freshly cloned above, or
+# already present with the expected remote; a skipped/foreign dir is left
+# alone. Each field under config.user maps to user.<field>.
+- name: "[{{ manifest_entry.key }}] Resolve per-repo identity (may be empty)"
+  ansible.builtin.set_fact:
+    repo_user: "{{ (manifest_entry.value.config | default({})).user | default({}) }}"
+
+- name: "[{{ manifest_entry.key }}] Set local git identity from the manifest (only fields present)"
+  community.general.git_config:
+    scope: local
+    repo: "{{ home_dir }}/{{ workspace_dir }}/{{ manifest_entry.key }}"
+    name: "user.{{ item.key }}"
+    value: "{{ item.value }}"
+  loop: "{{ repo_user | dict2items }}"
+  loop_control:
+    label: "user.{{ item.key }}"
+  when:
+    - repo_user | length > 0
+    - (not target_dir.stat.exists) or (target_git.stat.exists and (remote_ok | default(false)))
 
 ...

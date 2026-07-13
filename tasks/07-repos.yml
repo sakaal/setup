@@ -1,6 +1,13 @@
 ---
 # 07-repos.yml — ensure each repo from workspace.repos is cloned at
-# ~/{{ workspace_dir }}/<name>/. Per-entry behavior:
+# ~/{{ workspace_dir }}/<name>/, and apply the manifest's optional git
+# identity: a top-level `config.user` → git *global* config; a per-repo
+# `config.user` → that repo's *local* config (in 07-repos-one.yml). Both are
+# optional and, when absent, setup leaves the corresponding git config
+# untouched. Each field under `config.user` maps to `user.<field>` (name,
+# email, …). The identity values live only in the private workspace repo;
+# this public repo names the fields, never their contents. Per-entry clone
+# behavior:
 #
 #   target absent              → clone (using `version` if specified,
 #                                 else the remote's default branch)
@@ -26,9 +33,24 @@
         file: "{{ home_dir }}/{{ workspace_dir }}/workspace.repos"
         name: workspace_manifest
 
+    # Top-level config.user → git global identity. Empty/absent → untouched.
+    - name: Resolve top-level identity from the manifest (may be empty)
+      ansible.builtin.set_fact:
+        ws_global_user: "{{ (workspace_manifest.config | default({})).user | default({}) }}"
+
+    - name: Set git global identity from the manifest (only fields present)
+      community.general.git_config:
+        scope: global
+        name: "user.{{ item.key }}"
+        value: "{{ item.value }}"
+      loop: "{{ ws_global_user | dict2items }}"
+      loop_control:
+        label: "user.{{ item.key }}"
+      when: ws_global_user | length > 0
+
     - name: Process each manifest entry
       ansible.builtin.include_tasks: 07-repos-one.yml
-      loop: "{{ workspace_manifest.repositories | dict2items }}"
+      loop: "{{ workspace_manifest.repositories | default({}) | dict2items }}"
       loop_control:
         loop_var: manifest_entry
         label: "{{ manifest_entry.key }}"
@@ -36,6 +58,10 @@
     - name: Stage 07 summary
       ansible.builtin.debug:
         msg:
-          - "Workspace repos in manifest: {{ workspace_manifest.repositories | length }}"
+          - "Workspace repos in manifest: {{ workspace_manifest.repositories | default({}) | length }}"
+          - >-
+            Global git identity from manifest:
+            {{ 'set (' ~ (ws_global_user.keys() | list | join(', ')) ~ ')'
+               if ws_global_user | length > 0 else 'not set — left untouched' }}
 
 ...
