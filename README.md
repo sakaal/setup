@@ -129,7 +129,12 @@ find) its own clone, and is ignored when you run from a working copy.
 5. Lays the workspace manifest repo onto `~/<repo-name>/` (the optional
    argument overrides the default repo).
 6. Clones the repos listed in `workspace.repos` as siblings inside the
-   workspace directory.
+   workspace directory, and applies any git identity the manifest declares:
+   an optional top-level `config.user` (name/email) becomes your git *global*
+   identity, and a per-repo `config.user` sets that repo's *local* identity
+   (overriding the global default). Both are optional — without them setup
+   leaves git identity untouched. The identity values live in the private
+   workspace repo, never in this public one.
 7. Configures a machine-local baseline: global gitignore, `~/.local/bin` on
    PATH, and AI-assistant wiring. The agent-neutral sources — `ai/AGENTS.md`
    (instructions) and `ai/mcp.json` (MCP server list) — live in the private
