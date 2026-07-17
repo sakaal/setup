@@ -9,16 +9,17 @@
 # this public repo names the fields, never their contents. Per-entry clone
 # behavior:
 #
-#   target absent              → clone; on failure (unreachable / off VPN /
-#                                 bad URL) non-fatal — nothing is written, so a
-#                                 later run retries from the same manifest
+#   target absent              → clone; a failed clone is non-fatal — nothing is
+#                                 written, so a later run retries it from the
+#                                 same manifest, and git's reason is reported
 #   git repo, remote matches   → skip silently (already done)
 #   git repo, remote differs   → log a warning, skip (don't clobber)
 #   target dir exists, no .git → log a warning, skip (don't clobber)
 #
-# Cloning is best-effort: a failed clone never stops the bootstrap, and git
-# removes the partial checkout so no on-disk state is left to reconcile.
-# Existing clones are left untouched.
+# Cloning is best-effort: a failed clone never stops the bootstrap, whatever the
+# cause (unreachable remote, auth, permissions, disk), and git removes the
+# partial checkout so no on-disk state is left to reconcile. Existing clones are
+# left untouched.
 
 - name: Stat ~/{{ workspace_dir }}/workspace.repos
   ansible.builtin.stat:
