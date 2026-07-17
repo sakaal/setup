@@ -3,11 +3,13 @@
 # from 07-repos.yml. manifest_entry has .key (local dir name) and
 # .value (vcstool entry: type, url, optional version, optional config.user).
 #
-# Cloning is best-effort and never fatal: an unreachable remote (off VPN, host
-# down, bad URL) must not stop the bootstrap. A failed clone leaves nothing on
-# disk — git removes the partial checkout it created — so the target is simply
-# still absent, and a later run retries the clone from the same manifest once
-# the remote is reachable. No on-disk state to reconcile.
+# Cloning is best-effort and never fatal: a clone that fails — commonly an
+# unreachable remote (off VPN, host down, bad URL), but auth, permissions and a
+# full disk alike — must not stop the bootstrap. A failed clone leaves nothing
+# on disk — git removes the partial checkout it created — so the target is
+# simply still absent, and a later run retries it from the same manifest once
+# the cause is resolved. No on-disk state to reconcile. git's own reason for the
+# failure is reported, since the cause decides what the operator does next.
 #
 # Classifications and actions:
 #   absent              → clone; a failed clone is non-fatal (retried next run)
@@ -84,11 +86,12 @@
     - target_dir.stat.exists
     - not target_git.stat.exists
 
-# absent → clone. Tolerant: a failed clone (unreachable, off VPN, bad URL) must
-# not stop the bootstrap. `failed_when: false` keeps it non-fatal; git removes
-# the partial checkout on failure, so nothing is left to reconcile and a later
-# run — with the remote reachable — retries the clone from the same manifest.
-- name: "[{{ manifest_entry.key }}] Clone (target absent; non-fatal if unreachable)"
+# absent → clone. Tolerant: a failed clone must not stop the bootstrap, whatever
+# the cause — an unreachable remote is the common one, but auth, permissions and
+# a full disk fail the same way. `failed_when: false` keeps it non-fatal; git
+# removes the partial checkout on failure, so nothing is left to reconcile and a
+# later run retries the clone from the same manifest.
+- name: "[{{ manifest_entry.key }}] Clone (target absent; non-fatal on failure)"
   ansible.builtin.git:
     repo: "{{ manifest_entry.value.url }}"
     dest: "{{ home_dir }}/{{ workspace_dir }}/{{ manifest_entry.key }}"
@@ -99,15 +102,22 @@
   failed_when: false
   when: not target_dir.stat.exists
 
-# The clone runs with failed_when:false, so a failure surfaces as a non-zero
-# rc (the module sets rc only on failure), not as a failed task.
-- name: "[{{ manifest_entry.key }}] Clone failed — left absent (remote unreachable?)"
+# failed_when:false keeps a failed clone non-fatal, which also suppresses the
+# module's own error output — so report git's reason here, verbatim, rather than
+# guessing a cause: a clone fails on auth, permissions, or a full disk as
+# readily as on an unreachable remote. `after` is the module's documented
+# success return, so its absence is the failure signal that holds whatever the
+# cause; the dir guard keeps this quiet for a clone that never ran.
+- name: "[{{ manifest_entry.key }}] Clone failed — left absent (retried next run)"
   ansible.builtin.debug:
     msg: >-
-      [{{ manifest_entry.key }}] clone of {{ manifest_entry.value.url }} failed
-      (remote unreachable, off VPN, or bad URL). Nothing was written; a later
-      setup run retries it once reachable. Continuing.
-  when: repo_clone.rc | default(0) != 0
+      [{{ manifest_entry.key }}] clone of {{ manifest_entry.value.url }} failed:
+      {{ repo_clone.msg | default('(no detail reported)') }}
+      Nothing was written; a later setup run retries it once the cause is
+      resolved. Continuing.
+  when:
+    - not target_dir.stat.exists
+    - repo_clone.after is not defined
 
 # Optional per-repo config.user → this repo's *local* git identity, letting a
 # single repo override the global default (e.g. a client-specific identity).
@@ -130,6 +140,6 @@
   when:
     - repo_user | length > 0
     - (target_git.stat.exists and (remote_ok | default(false)))
-      or ((not target_dir.stat.exists) and (repo_clone.rc | default(0) == 0))
+      or ((not target_dir.stat.exists) and (repo_clone.after is defined))
 
 ...
