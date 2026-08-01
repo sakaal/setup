@@ -9,6 +9,8 @@
 #   absent, or an empty file          → create link / write stub
 #   already the correct link / stub   → no-op
 #   anything else (content, real dir) → record conflict; never touch it
+# Creating also ensures the target's parent directory exists — some link
+# targets (e.g. ~/.agents/AGENTS.md) live outside any tool-created dir.
 
 - name: "[{{ entry.tool }}:{{ entry.class }}] Resolve paths"
   ansible.builtin.set_fact:
@@ -85,6 +87,21 @@
       ansible.builtin.set_fact:
         ai_wire_conflicts: "{{ ai_wire_conflicts + [wire_target] }}"
       when: wire_action == 'conflict'
+
+    - name: "[{{ entry.tool }}:{{ entry.class }}] Stat target parent dir"
+      ansible.builtin.stat:
+        path: "{{ wire_target | dirname }}"
+      register: wire_parent
+      when: wire_action == 'create'
+
+    - name: "[{{ entry.tool }}:{{ entry.class }}] Create target parent dir (only if absent)"
+      ansible.builtin.file:
+        path: "{{ wire_target | dirname }}"
+        state: directory
+        mode: "0755"
+      when:
+        - wire_action == 'create'
+        - not (wire_parent.stat.exists | default(false))
 
     - name: "[{{ entry.tool }}:{{ entry.class }}] Create symlink"
       ansible.builtin.file:

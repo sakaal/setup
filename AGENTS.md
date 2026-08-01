@@ -145,7 +145,9 @@ step preferring the tool's official installer — immediately before
 `09-ai-config.yml`. The configuration stage wires a tool once its config
 directory exists (which its `detect` entry keys on), so wiring lands the same
 run for a tool whose installer creates that directory and the next run
-otherwise; the playbook is idempotent either way.
+otherwise; the playbook is idempotent either way. A tool may also be enrolled
+manifest-only, with no installer file (e.g. kimi-code, installed by its own
+script): its wiring then lands the first run its `detect` dir appears.
 
 `agent-map.json` is the authoritative, data-driven sync manifest: entries are
 grouped by **lane** (`distribute` / `harvest` / `non-reusable`); each
