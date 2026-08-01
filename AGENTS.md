@@ -272,6 +272,15 @@ PAT mint, generation choices) belong here, not in `setup.sh`.
   `.githooks/commit-msg`; after cloning, run
   `git config core.hooksPath .githooks` once to activate it.
 
+## Verification
+
+- **Shell edits**: `shellcheck` the touched script.
+- **Ansible edits**: `ansible-lint` (fails misleadingly unless
+  `community.general` is resolvable — see `.ansible-lint` header). Iterate on
+  one stage via `--tags <name> --check` (tags in `setup.yml`), never a full run.
+- **`files/ai-distill` / `files/ai-harvest`**: `bash tests/test-ai-<name>.sh` —
+  self-contained in a mktemp dir, safe to run as-is.
+
 ## Releases
 
 Annotated tags carry the release notes — no CHANGELOG file, no GitHub Release
