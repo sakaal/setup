@@ -7,9 +7,10 @@
 # both directions: it accepts a branch that never reached the base (upstream
 # match counts as merged), and it refuses one whose every line landed through
 # a rebase. The rest cover each merge style, each way work can be lost, the
-# fresh branch that content alone cannot tell from a merged one, -m with the
-# commit the forge reports for each merge style, a branch present on one side
-# only, operands that are no branch, and the survey and multi-repository forms.
+# fresh branch that content alone cannot tell from a merged one, -m with
+# either commit the forge reports, the forge's record looked up through a gh
+# double, a branch present on one side only, operands that are no branch,
+# and the survey and multi-repository forms.
 
 set -uo pipefail
 
@@ -35,6 +36,23 @@ expect_error()  { out=$(run -n "${@:3}"); [ $? -eq 2 ] && printf '%s' "$out" | g
 commit() { echo "$1" > "$dir/$1.txt"; g add -A; g commit --quiet -m "$1"; }
 has()    { g show-ref --verify --quiet "$1"; }
 
+# A double for gh, first on PATH: answers `pr list --head <branch>` from
+# GH_PR_LIST — lines of "<branch> <number> <sha>" — as the helper's --jq
+# would print them, and nothing for any other branch. Only a repository made
+# to look like github.com below ever reaches it.
+mkdir -p "$tmp/bin"
+cat > "$tmp/bin/gh" <<'EOF'
+#!/usr/bin/env bash
+head=''
+while [ $# -gt 0 ]; do
+    [ "$1" = --head ] && head=$2
+    shift
+done
+printf '%s\n' "${GH_PR_LIST-}" | awk -v h="$head" '$1 == h { print $2, $3 }'
+EOF
+chmod +x "$tmp/bin/gh"
+export PATH="$tmp/bin:$PATH"
+
 # An origin with main, a feature branch of one commit, both pushed, and main
 # moved on afterwards so a replayed commit lands on a different parent and so
 # gets a different SHA — without that a cherry-pick can come out byte-identical
@@ -54,6 +72,13 @@ new_repo() {
     g checkout --quiet main
     commit moved
     g push --quiet origin main 2>/dev/null
+}
+
+# Make origin look like github.com while the local bare repository keeps
+# serving it, so the helper asks the gh double.
+as_github() {
+    g config "url.$dir.git.insteadOf" "https://github.com/test/$1"
+    g remote set-url origin "https://github.com/test/$1"
 }
 
 # Land feature on main by rebase (a cherry-pick is one), leaving the branch.
@@ -113,6 +138,8 @@ else
     bad squash-premise "cherry no longer sees the squash as unmerged"
 fi
 expect_accept "squash: proven merged by content" 'already holds' feature
+expect_accept "squash: -m with the merge commit the forge reports" 'on the forge' -m "$(g rev-parse main)" feature
+expect_accept "squash: -m with the pull request's head" 'on the forge' -m "$(g rev-parse feature)" feature
 
 # --- merge commit: no commits of its own, told apart by topology ------------
 new_repo mergecommit
@@ -120,7 +147,7 @@ g merge --quiet --no-ff -m merged feature >/dev/null 2>&1
 g push --quiet origin main 2>/dev/null
 expect_accept "merge commit: proven merged" 'already holds' feature
 expect_accept "merge commit: -m with the merge commit" 'on the forge' -m "$(g rev-parse main)" feature
-expect_accept "merge commit: -m with the branch's head, which the merge carried into the base" 'on the forge' -m "$(g rev-parse feature)" feature
+expect_accept "merge commit: -m with the pull request's head" 'on the forge' -m "$(g rev-parse feature)" feature
 
 # --- fresh branch: no commits of its own, no merge absorbed it — kept -------
 new_repo fresh
@@ -141,6 +168,60 @@ g commit --quiet -m rewritten
 g push --quiet origin main 2>/dev/null
 expect_keep "conflict: kept when the base rewrote the branch's lines" 'does not' feature
 expect_accept "conflict: -m with the merge commit proves it regardless" 'on the forge' -m "$(g rev-parse main~1)" feature
+
+# --- rebase-only forge: remote branch deleted on merge, no ancestry left ----
+new_repo rebased
+land_by_rebase
+g push --quiet origin --delete feature 2>/dev/null
+g fetch --prune --quiet origin
+merge_commit=$(g rev-parse main)              # what the forge reports as mergeCommit
+head=$(g rev-parse feature)                   # what it reports as headRefOid
+expect_accept "rebase: -m with the merge commit the forge reports" 'on the forge' -m "$merge_commit" feature
+expect_accept "rebase: -m with the pull request's head" 'on the forge' -m "$head" feature
+echo rewritten > "$dir/work.txt"
+g add -A
+g commit --quiet -m rewritten
+g push --quiet origin main 2>/dev/null
+expect_keep "rebase, base edited over: content alone cannot prove it" 'does not' feature
+expect_accept "rebase, base edited over: -m with the merge commit proves it" 'on the forge' -m "$merge_commit" feature
+expect_accept "rebase, base edited over: -m with the head proves it" 'on the forge' -m "$head" feature
+as_github rebased
+export GH_PR_LIST="feature 7 $head"
+expect_accept "forge: the merged pull request proves it, unasked" 'pull request #7' feature
+export GH_PR_LIST="other 8 $head"
+expect_keep "forge: no merged pull request from the branch keeps it" 'no merged pull request' feature
+g checkout --quiet feature
+commit afterwards
+g checkout --quiet main
+export GH_PR_LIST="feature 7 $head"
+expect_keep "forge: work past the merged pull request's head keeps it" 'no merged pull request' feature
+unset GH_PR_LIST
+
+# --- forge: the pull request's head never reached this clone ---------------
+new_repo behind
+other="$dir-other"
+git clone --quiet "$dir.git" "$other" 2>/dev/null
+o() { git -C "$other" "$@"; }
+o config user.email t@example.com
+o config user.name Test
+o checkout --quiet feature 2>/dev/null
+echo more > "$other/more.txt"; o add -A; o commit --quiet -m more
+head=$(o rev-parse feature)
+o push --quiet origin feature:refs/pull/9/head 2>/dev/null
+o checkout --quiet main
+o cherry-pick --quiet feature~1 feature >/dev/null   # a rebase merge of both commits
+echo rewritten > "$other/work.txt"; o add -A; o commit --quiet -m rewritten
+o push --quiet origin main 2>/dev/null
+o push --quiet origin --delete feature 2>/dev/null
+as_github behind
+export GH_PR_LIST="feature 9 $head"
+if g rev-parse --verify --quiet "$head^{commit}" >/dev/null; then
+    bad behind-premise "the pull request's head is already in the clone"
+else
+    ok "forge: premise — the pull request's head is not in this clone"
+fi
+expect_accept "forge: the head is fetched from the pull request's ref and proves the branch" 'pull request #9' feature
+unset GH_PR_LIST
 
 # --- -m: the forge's merge commit, and what it still cannot vouch for -------
 new_repo forge
@@ -173,9 +254,12 @@ g reset --quiet --hard HEAD~1
 g checkout --quiet main
 expect_accept "-m: a local branch behind the merge is accepted" 'on the forge' -m "$merged" feature
 
-new_repo forge-outside
+new_repo forge-unrelated
 land_by_squash
-expect_keep "-m: a commit outside the base proves nothing" 'not in origin/main' -m "$(g rev-parse feature)" feature
+g checkout --quiet -b other main
+commit other
+g checkout --quiet main
+expect_keep "-m: a commit the branch does not reach is no proof" 'reaches past' -m "$(g rev-parse other)" feature
 
 # --- one side only ----------------------------------------------------------
 new_repo only-local                       # the forge deleted the remote on merge
@@ -228,7 +312,7 @@ else
     bad multi "$out"
 fi
 
-# --- several named branches: exit 1 when any is kept, 2 when any is no branch
+# --- several named branches: exit 1 when any is kept or never found ---------
 new_repo named
 land_by_rebase
 g checkout --quiet -b pending
@@ -242,8 +326,8 @@ else
     bad named "$out"
 fi
 out=$(run -n featrue feature); rc=$?
-if [ $rc -eq 2 ] && printf '%s\n' "$out" | grep -q '^✗ no branch named featrue' && printf '%s\n' "$out" | grep -q '^→ feature:'; then
-    ok "branch...: a name that is no branch is an error, and the rest are still considered"
+if [ $rc -eq 1 ] && printf '%s\n' "$out" | grep -q '^! featrue: never found' && printf '%s\n' "$out" | grep -q '^→ feature:'; then
+    ok "branch...: a name never found is said so, the rest still considered, exit 1"
 else
     bad named-unknown "$out"
 fi
@@ -253,8 +337,11 @@ new_repo usage
 out=$(run);                       [ $? -eq 2 ] && ok "usage: no operand is refused"           || bad usage-none "$out"
 out=$(run -a -m abc);             [ $? -eq 2 ] && ok "usage: -m with -a is refused"           || bad usage-am "$out"
 out=$(run -m abc feature pending); [ $? -eq 2 ] && ok "usage: -m with two branches is refused" || bad usage-m2 "$out"
-expect_error "usage: a list passed as one operand is no branch name" 'not a branch name' 'feature pending'
-expect_error "usage: a name that is no branch is an error, not a branch already gone" 'no branch named' featrue
+expect_error "usage: an empty operand is refused, not silently done" 'no branch name' ''
+expect_error "usage: an empty operand with -m is refused" 'no branch name' -m abc1234 ''
+expect_error "usage: a list passed as one operand is refused" 'no branch name' 'feature pending'
+out=$(run -a '');                 [ $? -eq 2 ] && ok "usage: an empty directory operand is refused" || bad usage-empty-dir "$out"
+expect_keep "usage: a misspelt name is reported never found, not already gone" 'never found' featrue
 
 # --- guards -----------------------------------------------------------------
 new_repo guards

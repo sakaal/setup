@@ -17,3 +17,6 @@ ehthumbs.db
 *~
 *.swp
 *.swo
+
+# Claude Code per-checkout local settings: permissions granted on this machine
+**/.claude/settings.local.json
