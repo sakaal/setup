@@ -148,7 +148,7 @@ holds() {
         0) [ "$tree" = "$(git rev-parse "$1^{tree}")" ] ;;
         1) return 1 ;;
         *) cherry=$(git cherry "$1" "$2") || fail "git cherry failed on $2"
-           ! printf '%s\n' "$cherry" | grep -q '^+' ;;
+           ! grep -q '^+' <<< "$cherry" ;;
     esac
 }
 
@@ -161,20 +161,18 @@ merged_by_merge_commit() {
 
 # The forge's own record, asked on doubt: a merged pull request from branch
 # $1 whose head nothing in $refs reaches past proves the branch, whatever
-# the merge made of the SHAs. Only gh on github.com is known how to ask.
-# Sets proof on success, else forge_note with why the record did not help.
+# the merge made of the SHAs. Only gh on github.com is known how to ask, so
+# $forge is that repository or empty. Sets proof on success, else forge_note
+# with why the record did not help.
 forge_merged() {
-    local slug prs number head ref
+    local prs number head ref
     forge_note=' — if a pull request merged it, pass -m with its head or merge commit'
-    command -v gh >/dev/null 2>&1 || return 1
-    slug=$(git config --get "remote.$remote.url" \
-        | sed -E 's#^[a-z+]*://##; s#^[^@/]*@##; s#^([^/:]+):#\1/#; s#\.git$##; s#/$##')
-    case $slug in github.com/*/*) ;; *) return 1 ;; esac
-    prs=$(gh pr list -R "$slug" --state merged --base "$base" --head "$1" \
+    [ -n "$forge" ] || return 1
+    prs=$(gh pr list -R "$forge" --state merged --base "$base" --head "$1" \
             --json number,headRefOid --jq '.[] | "\(.number) \(.headRefOid)"' 2>/dev/null) \
         || { forge_note=' — gh could not say whether a pull request merged it; pass -m with its head or merge commit'; return 1; }
     forge_note=' — no merged pull request on GitHub covers it either'
-    while read -r number head; do
+    while read -r number head <&3; do
         [ -n "$head" ] || continue
         # The head may have left this clone with the remote branch; the
         # forge still serves it under the pull request's own ref.
@@ -185,7 +183,7 @@ forge_merged() {
         done
         proof="merged as pull request #$number on the forge"
         return 0
-    done <<< "$prs"
+    done 3<<< "$prs"
     return 1
 }
 
@@ -208,7 +206,7 @@ consider() {
     [ "$name" != "$base" ] || { kept "$name" 'it is the base branch'; return 1; }
 
     # Any worktree, not just this one: a branch checked out elsewhere is in use.
-    if git worktree list --porcelain | grep -qxF "branch refs/heads/$name"; then
+    if git worktree list --porcelain | grep -xF "branch refs/heads/$name" >/dev/null; then
         kept "$name" 'it is checked out in a worktree'; return 1
     fi
 
@@ -238,10 +236,15 @@ consider() {
             done
         else
             # Off the base, so the pull request's head: nothing on the
-            # branch may reach past it.
+            # branch may reach past it. A commit the branch does not reach
+            # either is the wrong operand, not later work.
             for ref in $refs; do
                 git merge-base --is-ancestor "$ref" "$merged_tip" || {
-                    kept "$name" "$ref reaches past the pull request's head $short — work was committed or pushed after the merge"
+                    if git merge-base --is-ancestor "$merged_tip" "$ref"; then
+                        kept "$name" "$ref reaches past the pull request's head $short — work was committed or pushed after the merge"
+                    else
+                        kept "$name" "$short is neither on $remote/$base nor on the branch — is it the commit the pull request reports?"
+                    fi
                     return 1
                 }
             done
@@ -290,6 +293,7 @@ consider() {
 # worst verdict: 1 when a branch named on the command line was kept or never
 # found, 2 when a name was no branch.
 process_repo() {
+    local forge
     git rev-parse --git-dir >/dev/null 2>&1 || fail "$PWD is not a git repository"
 
     if [ -z "$base" ]; then
@@ -301,6 +305,12 @@ process_repo() {
     git fetch --prune --quiet "$remote" || fail "cannot reach $remote from $PWD"
     git show-ref --verify --quiet "refs/remotes/$remote/$base" \
         || fail "$remote/$base is missing in $PWD, so there is nothing to prove against"
+
+    # The repository gh can be asked about, once per repository: github.com
+    # only, from the remote URL in any of its spellings.
+    forge=$(git config --get "remote.$remote.url" \
+        | sed -E 's#^[a-z+]*://##; s#^[^@/]*@##; s#^([^/:]+):#\1/#; s#/$##; s#\.git$##')
+    case $forge in github.com/*/*) command -v gh >/dev/null 2>&1 || forge='' ;; *) forge='' ;; esac
 
     local names rc=0 name verdict
     if [ "$all" -eq 1 ]; then

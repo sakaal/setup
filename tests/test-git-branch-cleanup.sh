@@ -259,7 +259,7 @@ land_by_squash
 g checkout --quiet -b other main
 commit other
 g checkout --quiet main
-expect_keep "-m: a commit the branch does not reach is no proof" 'reaches past' -m "$(g rev-parse other)" feature
+expect_keep "-m: a commit the branch does not reach is no proof" 'neither on' -m "$(g rev-parse other)" feature
 
 # --- one side only ----------------------------------------------------------
 new_repo only-local                       # the forge deleted the remote on merge
@@ -342,6 +342,18 @@ expect_error "usage: an empty operand with -m is refused" 'no branch name' -m ab
 expect_error "usage: a list passed as one operand is refused" 'no branch name' 'feature pending'
 out=$(run -a '');                 [ $? -eq 2 ] && ok "usage: an empty directory operand is refused" || bad usage-empty-dir "$out"
 expect_keep "usage: a misspelt name is reported never found, not already gone" 'never found' featrue
+
+# --- -b and -r: another base on another remote; --help ----------------------
+new_repo other-base
+g remote rename origin upstream
+g checkout --quiet -b develop main
+g push --quiet -u upstream develop 2>/dev/null
+g cherry-pick --quiet feature >/dev/null
+g push --quiet upstream develop 2>/dev/null
+g checkout --quiet main
+expect_accept "-b -r: proven against develop on upstream" 'already holds' -r upstream -b develop feature
+expect_keep "-b -r: unmerged against main on upstream" 'does not' -r upstream -b main feature
+out=$(run --help); [ $? -eq 0 ] && printf '%s' "$out" | grep -q '^Usage:' && ok "usage: --help prints the reference" || bad usage-help "$out"
 
 # --- guards -----------------------------------------------------------------
 new_repo guards
