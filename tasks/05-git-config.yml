@@ -2,7 +2,9 @@
 # 05-git-config.yml — machine-local git configuration not tied to any single
 # credential (those are stages 02–04).  Currently: deploy a global gitignore so
 # OS/editor cruft (.DS_Store, swap files, …) never enters a repo on this
-# machine, and point git's global core.excludesfile at it.
+# machine, point git's global core.excludesfile at it, prune dead
+# remote-tracking refs on every fetch, and deploy the merged-branch cleanup
+# helper.
 
 - name: Deploy global gitignore
   ansible.builtin.copy:
@@ -15,4 +17,28 @@
     scope: global
     name: core.excludesfile
     value: "{{ home_dir }}/.gitignore_global"
+
+# Without this a branch deleted on the forge leaves its remote-tracking ref
+# behind indefinitely, so the clone reports branches that no longer exist.
+- name: Prune dead remote-tracking refs on every fetch
+  community.general.git_config:
+    scope: global
+    name: fetch.prune
+    value: "true"
+
+- name: Ensure ~/bin exists
+  ansible.builtin.file:
+    path: "{{ home_dir }}/bin"
+    state: directory
+    mode: "0755"
+
+# ~/bin is on PATH wherever the distro's skeleton .profile puts it there
+# (Debian and Ubuntu do, when the directory exists), which also gives the
+# `git branch-cleanup` subcommand form.  macOS zsh does not, so callers use
+# the absolute path, as the other ~/bin helpers here do.
+- name: Deploy the merged-branch cleanup helper
+  ansible.builtin.copy:
+    src: git-branch-cleanup
+    dest: "{{ home_dir }}/bin/git-branch-cleanup"
+    mode: "0755"
 ...

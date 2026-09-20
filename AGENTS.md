@@ -277,9 +277,12 @@ PAT mint, generation choices) belong here, not in `setup.sh`.
 - **Shell edits**: `shellcheck` the touched script.
 - **Ansible edits**: `ansible-lint` (fails misleadingly unless
   `community.general` is resolvable — see `.ansible-lint` header). Iterate on
-  one stage via `--tags <name> --check` (tags in `setup.yml`), never a full run.
-- **`files/ai-distill` / `files/ai-harvest`**: `bash tests/test-ai-<name>.sh` —
-  self-contained in a mktemp dir, safe to run as-is.
+  one stage via `--tags <name> --check -e skip_credentials=true` (tags in
+  `setup.yml`; stage 01 is `always`-tagged and otherwise calls pass-cli), never
+  a full run.
+- **`files/ai-distill` / `files/ai-harvest` / `files/git-branch-cleanup`**:
+  `bash tests/test-<name>.sh` — self-contained in a mktemp dir, safe to run
+  as-is.
 
 ## Releases
 

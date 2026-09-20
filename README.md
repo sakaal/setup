@@ -151,7 +151,8 @@ find) its own clone, and is ignored when you run from a working copy.
    (overriding the global default). Both are optional — without them setup
    leaves git identity untouched. The identity values live in the private
    workspace repo, never in this public one.
-7. Configures a machine-local baseline: global gitignore, `~/.local/bin` on
+7. Configures a machine-local baseline: global gitignore, `fetch.prune`, the
+   merged-branch cleanup helper `~/bin/git-branch-cleanup`, `~/.local/bin` on
    PATH, and AI-assistant wiring. The agent-neutral sources — `ai/AGENTS.md`
    (instructions) and `ai/mcp.json` (MCP server list) — live in the private
    workspace repo, not here; `~/.config/ai/` holds stable symlinks to them.

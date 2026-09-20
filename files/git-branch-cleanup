@@ -1,0 +1,338 @@
+#!/usr/bin/env bash
+#
+# git-branch-cleanup — delete merged branches, local and remote, once each is
+# proven to carry nothing the base branch does not already have. `-h` is the
+# reference. Reachable as `git branch-cleanup` where ~/bin is on PATH, since
+# git resolves a `git-<name>` on PATH as a subcommand.
+#
+# Git's own merged check (`git branch -d`) is wrong in both directions: it
+# accepts a branch that merely matches its pushed upstream, whether or not
+# that work reached the base, and it refuses a branch whose every line landed
+# through a rebase or squash, because the rewritten commits are no longer
+# ancestors. Reaching for `-D` past that refusal discards the check rather
+# than satisfying it. This establishes the proof first; the delete below is
+# `-D` for that reason alone.
+#
+# One proof, the content: a merge of the branch into a commit that would
+# change nothing shows that commit already holds the branch, however it got
+# there. It is made against the base's tip; a branch with no commits of its
+# own — nobody has started on it, or a merge commit absorbed it — is the one
+# case content cannot settle, and the base's merge topology tells those
+# apart. What content cannot prove is a merge the base has since edited
+# over, and there the forge's record settles it: a merged pull request whose
+# head nothing on the branch reaches past. That record is given as -m, with
+# either commit a pull request reports — its head, or its merge commit on
+# the base, against which the content is proven as it stood when merged —
+# or, on GitHub, looked up through gh without being asked.
+#
+# Every check keeps the branch on doubt. A branch kept costs a line of
+# output; a branch deleted costs the work on it.
+#
+# Deployed by setup; do not edit. Edit setup's source instead.
+
+set -uo pipefail
+
+usage() {
+    cat <<'EOF'
+Usage: git-branch-cleanup [-n] [-m commit] [-b base] [-r remote] branch...
+       git-branch-cleanup -a [-n] [-b base] [-r remote] [directory...]
+
+Delete branches that are already merged, local and remote, and only those.
+A branch is deleted when the base branch is proven to hold everything on
+it; otherwise it is kept and the reason is printed. Rebase, squash and
+merge-commit merges are all recognised. A branch that exists only locally
+or only on the remote is handled the same way.
+
+  branch...      the branches to consider, in the current repository, one
+                 name per operand
+  -a             consider every branch in the repository, local and remote,
+                 other than the base. Operands are then repositories, one or
+                 more, default the current directory; a shell glob such as
+                 ~/workspace/*/ does the expanding.
+  -n             list only: print the verdict for each branch, delete nothing
+  -m commit      the commit a pull request reports as merged: either its
+                 head (GitHub's headRefOid) or its merge commit on the base
+                 (mergeCommit), whatever the merge style. Either proves a
+                 branch the content cannot, one whose merged lines the base
+                 has since edited; work beyond the merge still keeps it.
+                 One branch only.
+  -b base        the branch to prove against; default the remote's HEAD,
+                 else main
+  -r remote      the remote holding the branches; default origin
+  -h             this help
+
+Where gh is installed and the remote is on github.com, a branch the content
+does not prove is checked against the forge itself: a merged pull request
+from it whose head nothing on the branch reaches past proves it, with no
+-m needed.
+
+Kept, always: the base branch, a branch checked out in any worktree, a
+branch with no commits of its own that no merge absorbed (nobody has
+started on it yet), and any branch holding commits the base does not.
+
+Exit status: 0 when every named branch was deleted or, with -n, could be;
+1 when a named branch was kept, or was never found locally or on the
+remote (with -a, kept branches are expected and do not affect it); 2 on
+an error, such as an unreachable remote or an operand that is no branch
+name.
+
+Examples
+  git-branch-cleanup -n feature/x        would feature/x be deleted, and why?
+  git-branch-cleanup -m 3f2a1c feature/x the pull request was merged as 3f2a1c
+  git-branch-cleanup -a -n               survey this repository
+  git-branch-cleanup -a -n ~/work/*/     survey every repository under ~/work
+  git-branch-cleanup -a                  delete every provably merged branch here
+EOF
+}
+
+say()  { printf '→ %s\n' "$1"; }
+kept() { printf '! keeping %s: %s\n' "$1" "$2" >&2; return 1; }
+err()  { printf '✗ %s\n' "$1" >&2; return 2; }
+fail() { err "$1"; exit 2; }
+
+all=0
+dry_run=0
+base=''
+remote='origin'
+merged=''
+
+case "${1-}" in --help) usage; exit 0 ;; esac
+
+while getopts ':anb:r:m:h' opt; do
+    case "$opt" in
+        a) all=1 ;;
+        n) dry_run=1 ;;
+        b) base=$OPTARG ;;
+        r) remote=$OPTARG ;;
+        m) merged=$OPTARG ;;
+        h) usage; exit 0 ;;
+        :) fail "option -$OPTARG needs a value" ;;
+        \?) fail "unknown option -$OPTARG" ;;
+    esac
+done
+shift $((OPTIND - 1))
+
+if [ "$all" -eq 1 ]; then
+    [ -z "$merged" ] || fail '-m names one merged commit, so it takes one branch, not -a'
+    dirs=("$@")
+    [ ${#dirs[@]} -gt 0 ] || dirs=(.)
+    for dir in "${dirs[@]}"; do
+        [ -n "$dir" ] || fail 'an empty operand is no directory'
+    done
+    branches=()
+else
+    [ $# -ge 1 ] || { usage >&2; exit 2; }
+    [ -z "$merged" ] || [ $# -eq 1 ] || fail '-m names one merged commit, so it takes exactly one branch'
+    # An empty or blank operand is a caller's list gone wrong — an unquoted
+    # variable under zsh — and must not pass as nothing to do.
+    for name in "$@"; do
+        case $name in
+            ''|*[[:space:]]*) fail "'$name' is no branch name; name each branch as one operand" ;;
+        esac
+    done
+    dirs=(.)
+    branches=("$@")
+fi
+
+# Does $1 already hold everything on $2? merge-tree does the three-way merge
+# without touching the worktree; a result tree equal to $1's own means the
+# merge would change nothing. A conflict means $1 moved on across the
+# branch's lines, which is doubt. A git without --write-tree (before 2.38)
+# exits with a usage error, and patch ids stand in: they prove a rebase but
+# not a squash of several commits, which is then kept.
+holds() {
+    local tree status cherry
+    tree=$(git merge-tree --write-tree "$1" "$2" 2>/dev/null)
+    status=$?
+    case $status in
+        0) [ "$tree" = "$(git rev-parse "$1^{tree}")" ] ;;
+        1) return 1 ;;
+        *) cherry=$(git cherry "$1" "$2") || fail "git cherry failed on $2"
+           ! grep -q '^+' <<< "$cherry" ;;
+    esac
+}
+
+# Is $1 a non-first parent of a merge commit in the base? Only the commits
+# after $1 can be that merge, so the walk is bounded to them.
+merged_by_merge_commit() {
+    git rev-list --merges --parents "$1..$remote/$base" \
+        | awk -v t="$1" '{ for (i = 3; i <= NF; i++) if ($i == t) f = 1 } END { exit !f }'
+}
+
+# The forge's own record, asked on doubt: a merged pull request from branch
+# $1 whose head nothing in $refs reaches past proves the branch, whatever
+# the merge made of the SHAs. Only gh on github.com is known how to ask, so
+# $forge is that repository or empty. Sets proof on success, else forge_note
+# with why the record did not help.
+forge_merged() {
+    local prs number head ref
+    forge_note=' — if a pull request merged it, pass -m with its head or merge commit'
+    [ -n "$forge" ] || return 1
+    prs=$(gh pr list -R "$forge" --state merged --base "$base" --head "$1" \
+            --json number,headRefOid --jq '.[] | "\(.number) \(.headRefOid)"' 2>/dev/null) \
+        || { forge_note=' — gh could not say whether a pull request merged it; pass -m with its head or merge commit'; return 1; }
+    forge_note=' — no merged pull request on GitHub covers it either'
+    while read -r number head <&3; do
+        [ -n "$head" ] || continue
+        # The head may have left this clone with the remote branch; the
+        # forge still serves it under the pull request's own ref.
+        git rev-parse --verify --quiet "$head^{commit}" >/dev/null \
+            || git fetch --quiet "$remote" "refs/pull/$number/head" 2>/dev/null || continue
+        for ref in $refs; do
+            git merge-base --is-ancestor "$ref" "$head" || continue 2
+        done
+        proof="merged as pull request #$number on the forge"
+        return 0
+    done 3<<< "$prs"
+    return 1
+}
+
+# Every branch name the repository knows under either the local or the
+# remote namespace, other than the base and the remote's HEAD pointer.
+candidates() {
+    {
+        git for-each-ref --format='%(refname)' refs/heads/ | sed 's|^refs/heads/||'
+        git for-each-ref --format='%(refname)' "refs/remotes/$remote/" | sed "s|^refs/remotes/$remote/||"
+    } | grep -vxF -e HEAD -e "$base" | sort -u
+}
+
+# Prove one branch and, unless listing, delete it. Returns 1 when kept or
+# never found, 2 when the name cannot be a branch.
+consider() {
+    local name=$1 refs='' ref tip own proof reason forge_note what has_local=0 has_remote=0
+
+    git check-ref-format --branch "$name" >/dev/null 2>&1 \
+        || { err "'$name' is not a branch name"; return 2; }
+    [ "$name" != "$base" ] || { kept "$name" 'it is the base branch'; return 1; }
+
+    # Any worktree, not just this one: a branch checked out elsewhere is in use.
+    if git worktree list --porcelain | grep -xF "branch refs/heads/$name" >/dev/null; then
+        kept "$name" 'it is checked out in a worktree'; return 1
+    fi
+
+    git show-ref --verify --quiet "refs/heads/$name" && has_local=1
+    git show-ref --verify --quiet "refs/remotes/$remote/$name" && has_remote=1
+    if [ "$has_local" -eq 0 ] && [ "$has_remote" -eq 0 ]; then
+        # A misspelt name must not read as a cleanup already done.
+        printf '! %s: never found, locally or on %s\n' "$name" "$remote" >&2
+        return 1
+    fi
+    [ "$has_local" -eq 1 ]  && refs="refs/heads/$name"
+    [ "$has_remote" -eq 1 ] && refs="$refs refs/remotes/$remote/$name"
+
+    if [ -n "$merged" ]; then
+        local merged_tip short
+        merged_tip=$(git rev-parse --verify --quiet "${merged}^{commit}") \
+            || { kept "$name" "the merged commit $merged is not in this clone"; return 1; }
+        short=$(git rev-parse --short "$merged_tip")
+        if git merge-base --is-ancestor "$merged_tip" "$remote/$base"; then
+            # On the base, so the merge commit, whatever the merge made of
+            # the SHAs: the content is proven against it.
+            for ref in $refs; do
+                holds "$merged_tip" "$(git rev-parse "$ref")" || {
+                    kept "$name" "$ref holds changes the merged commit $short does not — work was committed or pushed after the merge"
+                    return 1
+                }
+            done
+        else
+            # Off the base, so the pull request's head: nothing on the
+            # branch may reach past it. A commit the branch does not reach
+            # either is the wrong operand, not later work.
+            for ref in $refs; do
+                git merge-base --is-ancestor "$ref" "$merged_tip" || {
+                    if git merge-base --is-ancestor "$merged_tip" "$ref"; then
+                        kept "$name" "$ref reaches past the pull request's head $short — work was committed or pushed after the merge"
+                    else
+                        kept "$name" "$short is neither on $remote/$base nor on the branch — is it the commit the pull request reports?"
+                    fi
+                    return 1
+                }
+            done
+        fi
+        proof="merged as $short on the forge"
+    else
+        reason=''
+        for ref in $refs; do
+            tip=$(git rev-parse "$ref")
+            own=$(git rev-list --count "$remote/$base..$tip") || fail "git rev-list failed on $ref"
+            if [ "$own" -eq 0 ]; then
+                merged_by_merge_commit "$tip" \
+                    || { reason="$ref holds no commits of its own and no merge in $remote/$base absorbed it — work has not started on it"; break; }
+            else
+                holds "$remote/$base" "$tip" \
+                    || { reason="$ref holds changes $remote/$base does not"; break; }
+            fi
+        done
+        if [ -z "$reason" ]; then
+            proof="the base already holds everything on it"
+        elif ! forge_merged "$name"; then
+            kept "$name" "$reason$forge_note"
+            return 1
+        fi
+    fi
+
+    what=''
+    [ "$has_local" -eq 1 ]  && what='the local branch'
+    [ "$has_remote" -eq 1 ] && what="${what:+$what and }$remote/$name"
+
+    if [ "$dry_run" -eq 1 ]; then
+        say "$name: $proof; would delete $what"
+        return 0
+    fi
+    if [ "$has_local" -eq 1 ]; then
+        git branch -D "$name" >/dev/null || fail "$name: could not delete the local branch"
+    fi
+    if [ "$has_remote" -eq 1 ]; then
+        git push --quiet "$remote" --delete "$name" || fail "$name: could not delete $remote/$name$(
+            [ "$has_local" -eq 1 ] && printf ' (the local branch is already gone)')"
+    fi
+    say "$name: $proof; deleted $what"
+}
+
+# One repository, in a subshell so its cwd and base stay its own. Returns the
+# worst verdict: 1 when a branch named on the command line was kept or never
+# found, 2 when a name was no branch.
+process_repo() {
+    local forge
+    git rev-parse --git-dir >/dev/null 2>&1 || fail "$PWD is not a git repository"
+
+    if [ -z "$base" ]; then
+        base=$(git symbolic-ref --quiet --short "refs/remotes/$remote/HEAD" 2>/dev/null)
+        base=${base#"$remote/"}
+        [ -n "$base" ] || base='main'
+    fi
+
+    git fetch --prune --quiet "$remote" || fail "cannot reach $remote from $PWD"
+    git show-ref --verify --quiet "refs/remotes/$remote/$base" \
+        || fail "$remote/$base is missing in $PWD, so there is nothing to prove against"
+
+    # The repository gh can be asked about, once per repository: github.com
+    # only, from the remote URL in any of its spellings.
+    forge=$(git config --get "remote.$remote.url" \
+        | sed -E 's#^[a-z+]*://##; s#^[^@/]*@##; s#^([^/:]+):#\1/#; s#/$##; s#\.git$##')
+    case $forge in github.com/*/*) command -v gh >/dev/null 2>&1 || forge='' ;; *) forge='' ;; esac
+
+    local names rc=0 name verdict
+    if [ "$all" -eq 1 ]; then
+        names=$(candidates)
+    else
+        names=$(printf '%s\n' "${branches[@]}")
+    fi
+    while IFS= read -r name; do
+        [ -n "$name" ] || continue
+        consider "$name"
+        verdict=$?
+        [ "$all" -eq 0 ] || [ "$verdict" -ne 1 ] || verdict=0
+        [ "$verdict" -le "$rc" ] || rc=$verdict
+    done <<< "$names"
+    return "$rc"
+}
+
+worst=0
+for dir in "${dirs[@]}"; do
+    [ ${#dirs[@]} -eq 1 ] || say "$dir"
+    ( cd "$dir" 2>/dev/null || fail "cannot enter $dir"; process_repo )
+    rc=$?
+    [ "$rc" -le "$worst" ] || worst=$rc
+done
+exit "$worst"
