@@ -278,8 +278,9 @@ PAT mint, generation choices) belong here, not in `setup.sh`.
 - **Ansible edits**: `ansible-lint` (fails misleadingly unless
   `community.general` is resolvable — see `.ansible-lint` header). Iterate on
   one stage via `--tags <name> --check` (tags in `setup.yml`), never a full run.
-- **`files/ai-distill` / `files/ai-harvest`**: `bash tests/test-ai-<name>.sh` —
-  self-contained in a mktemp dir, safe to run as-is.
+- **`files/ai-distill` / `files/ai-harvest` / `files/git-branch-cleanup`**:
+  `bash tests/test-<name>.sh` — self-contained in a mktemp dir, safe to run
+  as-is.
 
 ## Releases
 

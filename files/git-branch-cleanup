@@ -13,18 +13,22 @@
 # than satisfying it. This establishes the proof first; the delete below is
 # `-D` for that reason alone.
 #
-# Two proofs, in descending strength:
+# One proof, the content: a merge of the branch into a commit that would
+# change nothing shows that commit already holds the branch, however it got
+# there. Which commit it is made against is the difference between the two
+# forms:
 #
-#   -m commit  the forge merged that commit, so the content is in the base
-#              whatever the merge did to the SHAs. What remains unaccounted
-#              for is work beyond that commit, local or pushed, which is the
-#              ancestor check.
-#   (default)  no forge answer, so the content itself is compared: a merge of
-#              the branch into the base that would change nothing proves the
-#              base already holds it, however it got there. A branch with no
-#              commits of its own is the one case content cannot settle —
-#              nobody has started on it, or a merge commit absorbed it — and
-#              the base's merge topology tells those apart.
+#   (default)  the base's tip. A branch with no commits of its own is the one
+#              case content cannot settle — nobody has started on it, or a
+#              merge commit absorbed it — and the base's merge topology tells
+#              those apart.
+#   -m commit  the commit the forge merged the pull request as, on the base:
+#              a merge commit, a squash or the last rebased commit alike. The
+#              base's tip may since have edited the same lines, which the
+#              default reads as doubt; at the merge commit the content is
+#              still as the branch left it. What remains unaccounted for is
+#              work beyond the merge, local or pushed, which the same
+#              comparison finds.
 #
 # Every check keeps the branch on doubt. A branch kept costs a line of
 # output; a branch deleted costs the work on it.
@@ -50,9 +54,12 @@ or only on the remote is handled the same way.
                  more, default the current directory; a shell glob such as
                  ~/workspace/*/ does the expanding.
   -n             list only: print the verdict for each branch, delete nothing
-  -m commit      the commit a pull request reports as merged. Stronger than
-                 the content proof, and the only proof for a branch whose
-                 merge the base later edited over. One branch only.
+  -m commit      the commit the pull request was merged as, on the base —
+                 what the forge reports as its merge commit, whatever the
+                 merge style. The branch is proven against that commit
+                 instead of the base's tip, so it is the proof for a branch
+                 whose merged lines the base has since edited. One branch
+                 only.
   -b base        the branch to prove against; default the remote's HEAD,
                  else main
   -r remote      the remote holding the branches; default origin
@@ -64,11 +71,12 @@ started on it yet), and any branch holding commits the base does not.
 
 Exit status: 0 when every named branch was deleted or, with -n, could be;
 1 when a named branch was kept (with -a, kept branches are expected and do
-not affect it); 2 on an error, such as an unreachable remote.
+not affect it); 2 on an error, such as an unreachable remote or a name
+that is no branch, locally or on the remote.
 
 Examples
   git-branch-cleanup -n feature/x        would feature/x be deleted, and why?
-  git-branch-cleanup -m 3f2a1c feature/x the pull request merged 3f2a1c
+  git-branch-cleanup -m 3f2a1c feature/x the pull request was merged as 3f2a1c
   git-branch-cleanup -a -n               survey this repository
   git-branch-cleanup -a -n ~/work/*/     survey every repository under ~/work
   git-branch-cleanup -a                  delete every provably merged branch here
@@ -77,7 +85,8 @@ EOF
 
 say()  { printf '→ %s\n' "$1"; }
 kept() { printf '! keeping %s: %s\n' "$1" "$2" >&2; return 1; }
-fail() { printf '✗ %s\n' "$1" >&2; exit 2; }
+err()  { printf '✗ %s\n' "$1" >&2; return 2; }
+fail() { err "$1"; exit 2; }
 
 all=0
 dry_run=0
@@ -113,19 +122,20 @@ else
     branches=("$@")
 fi
 
-# Would merging $1 into the base leave the base's tree unchanged? merge-tree
-# does the three-way merge without touching the worktree; a conflict means
-# the base moved on across the branch's lines, which is doubt. A git without
-# --write-tree (before 2.38) exits with a usage error, and patch ids stand in:
-# they prove a rebase but not a squash of several commits, which is then kept.
-in_base() {
+# Does $1 already hold everything on $2? merge-tree does the three-way merge
+# without touching the worktree; a result tree equal to $1's own means the
+# merge would change nothing. A conflict means $1 moved on across the
+# branch's lines, which is doubt. A git without --write-tree (before 2.38)
+# exits with a usage error, and patch ids stand in: they prove a rebase but
+# not a squash of several commits, which is then kept.
+holds() {
     local tree status cherry
-    tree=$(git merge-tree --write-tree "$remote/$base" "$1" 2>/dev/null)
+    tree=$(git merge-tree --write-tree "$1" "$2" 2>/dev/null)
     status=$?
     case $status in
-        0) [ "$tree" = "$(git rev-parse "$remote/$base^{tree}")" ] ;;
+        0) [ "$tree" = "$(git rev-parse "$1^{tree}")" ] ;;
         1) return 1 ;;
-        *) cherry=$(git cherry "$remote/$base" "$1") || fail "git cherry failed on $1"
+        *) cherry=$(git cherry "$1" "$2") || fail "git cherry failed on $2"
            ! printf '%s\n' "$cherry" | grep -q '^+' ;;
     esac
 }
@@ -146,10 +156,16 @@ candidates() {
     } | grep -vxF -e HEAD -e "$base" | sort -u
 }
 
-# Prove one branch and, unless listing, delete it. Returns 1 when kept.
+# Prove one branch and, unless listing, delete it. Returns 1 when kept, 2
+# when the name is no branch at all.
 consider() {
     local name=$1 refs='' ref tip own proof what has_local=0 has_remote=0
 
+    # A name that cannot be a branch is an operand gone wrong — a list a
+    # shell passed as one word, say — and must not pass as a branch already
+    # gone; nor may a name that is no branch anywhere.
+    git check-ref-format --branch "$name" >/dev/null 2>&1 \
+        || { err "'$name' is not a branch name"; return 2; }
     [ "$name" != "$base" ] || { kept "$name" 'it is the base branch'; return 1; }
 
     # Any worktree, not just this one: a branch checked out elsewhere is in use.
@@ -160,8 +176,7 @@ consider() {
     git show-ref --verify --quiet "refs/heads/$name" && has_local=1
     git show-ref --verify --quiet "refs/remotes/$remote/$name" && has_remote=1
     if [ "$has_local" -eq 0 ] && [ "$has_remote" -eq 0 ]; then
-        say "$name is already gone, locally and on $remote"
-        return 0
+        err "no branch named $name, locally or on $remote"; return 2
     fi
     [ "$has_local" -eq 1 ]  && refs="refs/heads/$name"
     [ "$has_remote" -eq 1 ] && refs="$refs refs/remotes/$remote/$name"
@@ -170,10 +185,14 @@ consider() {
         local merged_tip
         merged_tip=$(git rev-parse --verify --quiet "${merged}^{commit}") \
             || { kept "$name" "the merged commit $merged is not in this clone"; return 1; }
+        git merge-base --is-ancestor "$merged_tip" "$remote/$base" || {
+            kept "$name" "the merged commit $(git rev-parse --short "$merged_tip") is not in $remote/$base — pass the commit the pull request was merged as, on the base"
+            return 1
+        }
         for ref in $refs; do
             tip=$(git rev-parse "$ref")
-            git merge-base --is-ancestor "$tip" "$merged_tip" || {
-                kept "$name" "$ref reaches past the merged commit $(git rev-parse --short "$merged_tip") — work was committed or pushed after the merge"
+            holds "$merged_tip" "$tip" || {
+                kept "$name" "$ref holds changes the merged commit $(git rev-parse --short "$merged_tip") does not — work was committed or pushed after the merge"
                 return 1
             }
         done
@@ -188,8 +207,8 @@ consider() {
                     return 1
                 }
             else
-                in_base "$tip" || {
-                    kept "$name" "$ref holds changes $remote/$base does not — if a pull request merged it, pass -m with the merged commit"
+                holds "$remote/$base" "$tip" || {
+                    kept "$name" "$ref holds changes $remote/$base does not — if a pull request merged it, pass -m with the commit it was merged as"
                     return 1
                 }
             fi
@@ -215,8 +234,9 @@ consider() {
     say "$name: $proof; deleted $what"
 }
 
-# One repository, in a subshell so its cwd and base stay its own. Returns 1
-# when a branch named on the command line was kept.
+# One repository, in a subshell so its cwd and base stay its own. Returns the
+# worst verdict: 1 when a branch named on the command line was kept, 2 when a
+# name was no branch.
 process_repo() {
     git rev-parse --git-dir >/dev/null 2>&1 || fail "$PWD is not a git repository"
 
@@ -230,7 +250,7 @@ process_repo() {
     git show-ref --verify --quiet "refs/remotes/$remote/$base" \
         || fail "$remote/$base is missing in $PWD, so there is nothing to prove against"
 
-    local names rc=0 name
+    local names rc=0 name verdict
     if [ "$all" -eq 1 ]; then
         names=$(candidates)
     else
@@ -238,7 +258,10 @@ process_repo() {
     fi
     while IFS= read -r name; do
         [ -n "$name" ] || continue
-        consider "$name" || [ "$all" -eq 1 ] || rc=1
+        consider "$name"
+        verdict=$?
+        [ "$all" -eq 0 ] || [ "$verdict" -ne 1 ] || verdict=0
+        [ "$verdict" -le "$rc" ] || rc=$verdict
     done <<< "$names"
     return "$rc"
 }

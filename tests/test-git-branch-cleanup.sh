@@ -7,8 +7,9 @@
 # both directions: it accepts a branch that never reached the base (upstream
 # match counts as merged), and it refuses one whose every line landed through
 # a rebase. The rest cover each merge style, each way work can be lost, the
-# fresh branch that content alone cannot tell from a merged one, a branch
-# present on one side only, and the survey and multi-repository forms.
+# fresh branch that content alone cannot tell from a merged one, -m with the
+# commit the forge reports for each merge style, a branch present on one side
+# only, operands that are no branch, and the survey and multi-repository forms.
 
 set -uo pipefail
 
@@ -26,8 +27,10 @@ run() { ( cd "$dir" && "$script" "$@" 2>&1 ); }
 g()   { git -C "$dir" "$@"; }
 
 # Accepts: exit 0 and the output mentions $2. Keeps: exit 1 and it mentions $2.
+# Errors: exit 2 and it mentions $2.
 expect_accept() { out=$(run -n "${@:3}"); [ $? -eq 0 ] && printf '%s' "$out" | grep -q "$2" && ok "$1" || bad "$1" "$out"; }
 expect_keep()   { out=$(run -n "${@:3}"); [ $? -eq 1 ] && printf '%s' "$out" | grep -q "$2" && ok "$1" || bad "$1" "$out"; }
+expect_error()  { out=$(run -n "${@:3}"); [ $? -eq 2 ] && printf '%s' "$out" | grep -q "$2" && ok "$1" || bad "$1" "$out"; }
 
 commit() { echo "$1" > "$dir/$1.txt"; g add -A; g commit --quiet -m "$1"; }
 has()    { g show-ref --verify --quiet "$1"; }
@@ -56,6 +59,14 @@ new_repo() {
 # Land feature on main by rebase (a cherry-pick is one), leaving the branch.
 land_by_rebase() {
     g cherry-pick --quiet feature >/dev/null
+    g push --quiet origin main 2>/dev/null
+}
+
+# Land feature on main by squash, leaving the branch. The forge reports the
+# squash commit as the merge, and it has no ancestry to the branch at all.
+land_by_squash() {
+    g merge --quiet --squash feature >/dev/null 2>&1
+    g commit --quiet -m squashed
     g push --quiet origin main 2>/dev/null
 }
 
@@ -95,9 +106,7 @@ g checkout --quiet feature
 commit second
 g push --quiet origin feature 2>/dev/null
 g checkout --quiet main
-g merge --quiet --squash feature >/dev/null 2>&1
-g commit --quiet -m squashed
-g push --quiet origin main 2>/dev/null
+land_by_squash
 if [ "$(g cherry origin/main feature | grep -c '^+')" -eq 2 ]; then
     ok "squash: premise — patch ids report both commits unmerged"
 else
@@ -110,6 +119,8 @@ new_repo mergecommit
 g merge --quiet --no-ff -m merged feature >/dev/null 2>&1
 g push --quiet origin main 2>/dev/null
 expect_accept "merge commit: proven merged" 'already holds' feature
+expect_accept "merge commit: -m with the merge commit" 'on the forge' -m "$(g rev-parse main)" feature
+expect_accept "merge commit: -m with the branch's head, which the merge carried into the base" 'on the forge' -m "$(g rev-parse feature)" feature
 
 # --- fresh branch: no commits of its own, no merge absorbed it — kept -------
 new_repo fresh
@@ -121,41 +132,50 @@ commit later
 g push --quiet origin main 2>/dev/null
 expect_keep "fresh: still kept once the base has moved on" 'has not started' fresh-idea
 
-# --- base moved across the branch's lines after the merge: doubt, kept ------
+# --- base moved across the branch's lines after the merge: doubt, unless -m -
 new_repo conflict
-g merge --quiet --squash feature >/dev/null 2>&1
-g commit --quiet -m squashed
+land_by_squash
 echo rewritten > "$dir/work.txt"
 g add -A
 g commit --quiet -m rewritten
 g push --quiet origin main 2>/dev/null
 expect_keep "conflict: kept when the base rewrote the branch's lines" 'does not' feature
+expect_accept "conflict: -m with the merge commit proves it regardless" 'on the forge' -m "$(g rev-parse main~1)" feature
 
-# --- -m: the forge's answer, and what it still cannot vouch for -------------
+# --- -m: the forge's merge commit, and what it still cannot vouch for -------
 new_repo forge
-merged=$(g rev-parse feature)
+land_by_squash
+merged=$(g rev-parse main)
 g checkout --quiet feature
 commit unpushed
 g checkout --quiet main
-expect_keep "-m: unpushed local work past the merged commit is kept" 'reaches past' -m "$merged" feature
+expect_keep "-m: unpushed local work past the merge is kept" 'after the merge' -m "$merged" feature
 
 new_repo forge-remote
-merged=$(g rev-parse feature)
+land_by_squash
+merged=$(g rev-parse main)
 g checkout --quiet feature
 commit late-push
 g push --quiet origin feature 2>/dev/null
 g checkout --quiet main
 g branch --quiet -D feature
-expect_keep "-m: work pushed after the merge is kept" 'reaches past' -m "$merged" feature
+expect_keep "-m: work pushed after the merge is kept" 'after the merge' -m "$merged" feature
 
 new_repo forge-behind
 g checkout --quiet feature
 commit more
 g push --quiet origin feature 2>/dev/null
-merged=$(g rev-parse feature)
+g checkout --quiet main
+land_by_squash
+merged=$(g rev-parse main)
+g checkout --quiet feature
 g reset --quiet --hard HEAD~1
 g checkout --quiet main
-expect_accept "-m: a local branch behind the merged commit is accepted" 'on the forge' -m "$merged" feature
+expect_accept "-m: a local branch behind the merge is accepted" 'on the forge' -m "$merged" feature
+
+new_repo forge-outside
+land_by_squash
+expect_keep "-m: a commit outside the base proves nothing" 'not in origin/main' -m "$(g rev-parse feature)" feature
 
 # --- one side only ----------------------------------------------------------
 new_repo only-local                       # the forge deleted the remote on merge
@@ -208,7 +228,7 @@ else
     bad multi "$out"
 fi
 
-# --- several named branches: exit 1 when any is kept ------------------------
+# --- several named branches: exit 1 when any is kept, 2 when any is no branch
 new_repo named
 land_by_rebase
 g checkout --quiet -b pending
@@ -221,12 +241,20 @@ if [ $rc -eq 1 ] && printf '%s\n' "$out" | grep -q '^→ feature:' && printf '%s
 else
     bad named "$out"
 fi
+out=$(run -n featrue feature); rc=$?
+if [ $rc -eq 2 ] && printf '%s\n' "$out" | grep -q '^✗ no branch named featrue' && printf '%s\n' "$out" | grep -q '^→ feature:'; then
+    ok "branch...: a name that is no branch is an error, and the rest are still considered"
+else
+    bad named-unknown "$out"
+fi
 
 # --- usage ------------------------------------------------------------------
 new_repo usage
 out=$(run);                       [ $? -eq 2 ] && ok "usage: no operand is refused"           || bad usage-none "$out"
 out=$(run -a -m abc);             [ $? -eq 2 ] && ok "usage: -m with -a is refused"           || bad usage-am "$out"
 out=$(run -m abc feature pending); [ $? -eq 2 ] && ok "usage: -m with two branches is refused" || bad usage-m2 "$out"
+expect_error "usage: a list passed as one operand is no branch name" 'not a branch name' 'feature pending'
+expect_error "usage: a name that is no branch is an error, not a branch already gone" 'no branch named' featrue
 
 # --- guards -----------------------------------------------------------------
 new_repo guards
