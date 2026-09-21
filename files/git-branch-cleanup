@@ -18,8 +18,9 @@
 # there. It is made against the base's tip; a branch with no commits of its
 # own — never started on, fast-forwarded into the base, or absorbed by a
 # merge commit — is the one case content cannot settle: the base's merge
-# topology tells the third apart, and the first two only a forge answer
-# can. Content cannot prove a merge the base has since edited over either.
+# topology tells the third apart, and the first two only an answer from
+# outside the graph can, -m or the forge's record. Content cannot prove a
+# merge the base has since edited over either.
 # There the forge's record settles it: a merged pull request whose head
 # nothing on the branch reaches past. That record is given as -m, with
 # either commit a pull request reports — its head, or its merge commit on
@@ -167,13 +168,13 @@ merged_by_merge_commit() {
 # $forge is that repository or empty. Sets proof on success, else forge_note
 # with why the record did not help.
 forge_merged() {
-    local prs number head ref
-    forge_note=' — if it was merged, pass -m with its head or the merge commit'
+    local prs number head ref hint='if it was merged, pass -m with its head or the merge commit'
+    forge_note=" — $hint"
     [ -n "$forge" ] || return 1
     prs=$(gh pr list -R "$forge" --state merged --base "$base" --head "$1" \
             --json number,headRefOid --jq '.[] | "\(.number) \(.headRefOid)"' 2>/dev/null) \
-        || { forge_note=' — gh could not say whether a pull request merged it; if it was merged, pass -m with its head or the merge commit'; return 1; }
-    forge_note=' — no merged pull request on GitHub covers it; if it was merged another way, pass -m with its head'
+        || { forge_note=" — gh could not say whether a pull request merged it; $hint"; return 1; }
+    forge_note=" — no merged pull request on GitHub covers it; $hint"
     while read -r number head <&3; do
         [ -n "$head" ] || continue
         # The head may have left this clone with the remote branch; the
@@ -251,7 +252,7 @@ consider() {
                 }
             done
         fi
-        proof="merged as $short on the forge"
+        proof="merged as $short, given with -m"
     else
         reason=''
         for ref in $refs; do
