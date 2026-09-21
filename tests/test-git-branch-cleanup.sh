@@ -138,26 +138,36 @@ else
     bad squash-premise "cherry no longer sees the squash as unmerged"
 fi
 expect_accept "squash: proven merged by content" 'already holds' feature
-expect_accept "squash: -m with the merge commit the forge reports" 'on the forge' -m "$(g rev-parse main)" feature
-expect_accept "squash: -m with the pull request's head" 'on the forge' -m "$(g rev-parse feature)" feature
+expect_accept "squash: -m with the merge commit the forge reports" 'given with -m' -m "$(g rev-parse main)" feature
+expect_accept "squash: -m with the pull request's head" 'given with -m' -m "$(g rev-parse feature)" feature
 
 # --- merge commit: no commits of its own, told apart by topology ------------
 new_repo mergecommit
 g merge --quiet --no-ff -m merged feature >/dev/null 2>&1
 g push --quiet origin main 2>/dev/null
 expect_accept "merge commit: proven merged" 'already holds' feature
-expect_accept "merge commit: -m with the merge commit" 'on the forge' -m "$(g rev-parse main)" feature
-expect_accept "merge commit: -m with the pull request's head" 'on the forge' -m "$(g rev-parse feature)" feature
+expect_accept "merge commit: -m with the merge commit" 'given with -m' -m "$(g rev-parse main)" feature
+expect_accept "merge commit: -m with the pull request's head" 'given with -m' -m "$(g rev-parse feature)" feature
 
 # --- fresh branch: no commits of its own, no merge absorbed it — kept -------
 new_repo fresh
 g checkout --quiet -b fresh-idea
 g push --quiet -u origin fresh-idea 2>/dev/null
 g checkout --quiet main
-expect_keep "fresh: a branch with no commits is kept" 'has not started' fresh-idea
+expect_keep "fresh: a branch with no commits is kept" 'never started on' fresh-idea
 commit later
 g push --quiet origin main 2>/dev/null
-expect_keep "fresh: still kept once the base has moved on" 'has not started' fresh-idea
+expect_keep "fresh: still kept once the base has moved on" 'never started on' fresh-idea
+
+# --- fast-forwarded: the same shape as fresh, told from it only by -m -------
+new_repo fastforward
+g checkout --quiet -b ff main
+commit ff-work
+g checkout --quiet main
+g merge --quiet --ff-only ff >/dev/null
+g push --quiet origin main 2>/dev/null
+expect_keep "fast-forward: kept, since content cannot tell it from a fresh branch" 'fast-forwarded' ff
+expect_accept "fast-forward: -m with its head, which is on the base, proves it" 'given with -m' -m "$(g rev-parse ff)" ff
 
 # --- base moved across the branch's lines after the merge: doubt, unless -m -
 new_repo conflict
@@ -167,7 +177,7 @@ g add -A
 g commit --quiet -m rewritten
 g push --quiet origin main 2>/dev/null
 expect_keep "conflict: kept when the base rewrote the branch's lines" 'does not' feature
-expect_accept "conflict: -m with the merge commit proves it regardless" 'on the forge' -m "$(g rev-parse main~1)" feature
+expect_accept "conflict: -m with the merge commit proves it regardless" 'given with -m' -m "$(g rev-parse main~1)" feature
 
 # --- rebase-only forge: remote branch deleted on merge, no ancestry left ----
 new_repo rebased
@@ -176,15 +186,15 @@ g push --quiet origin --delete feature 2>/dev/null
 g fetch --prune --quiet origin
 merge_commit=$(g rev-parse main)              # what the forge reports as mergeCommit
 head=$(g rev-parse feature)                   # what it reports as headRefOid
-expect_accept "rebase: -m with the merge commit the forge reports" 'on the forge' -m "$merge_commit" feature
-expect_accept "rebase: -m with the pull request's head" 'on the forge' -m "$head" feature
+expect_accept "rebase: -m with the merge commit the forge reports" 'given with -m' -m "$merge_commit" feature
+expect_accept "rebase: -m with the pull request's head" 'given with -m' -m "$head" feature
 echo rewritten > "$dir/work.txt"
 g add -A
 g commit --quiet -m rewritten
 g push --quiet origin main 2>/dev/null
 expect_keep "rebase, base edited over: content alone cannot prove it" 'does not' feature
-expect_accept "rebase, base edited over: -m with the merge commit proves it" 'on the forge' -m "$merge_commit" feature
-expect_accept "rebase, base edited over: -m with the head proves it" 'on the forge' -m "$head" feature
+expect_accept "rebase, base edited over: -m with the merge commit proves it" 'given with -m' -m "$merge_commit" feature
+expect_accept "rebase, base edited over: -m with the head proves it" 'given with -m' -m "$head" feature
 as_github rebased
 export GH_PR_LIST="feature 7 $head"
 expect_accept "forge: the merged pull request proves it, unasked" 'pull request #7' feature
@@ -252,7 +262,7 @@ merged=$(g rev-parse main)
 g checkout --quiet feature
 g reset --quiet --hard HEAD~1
 g checkout --quiet main
-expect_accept "-m: a local branch behind the merge is accepted" 'on the forge' -m "$merged" feature
+expect_accept "-m: a local branch behind the merge is accepted" 'given with -m' -m "$merged" feature
 
 new_repo forge-unrelated
 land_by_squash
@@ -366,7 +376,7 @@ g checkout --quiet -b fix/v1x2
 g checkout --quiet -b fix/v1.2
 g push --quiet -u origin fix/v1.2 2>/dev/null
 g checkout --quiet fix/v1x2
-expect_keep "guard: a dot in the name is not a wildcard" 'has not started' fix/v1.2
+expect_keep "guard: a dot in the name is not a wildcard" 'never started on' fix/v1.2
 
 printf '\n%d passed, %d failed\n' "$pass" "$fail"
 [ "$fail" -eq 0 ]

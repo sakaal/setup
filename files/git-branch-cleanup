@@ -16,11 +16,13 @@
 # One proof, the content: a merge of the branch into a commit that would
 # change nothing shows that commit already holds the branch, however it got
 # there. It is made against the base's tip; a branch with no commits of its
-# own — nobody has started on it, or a merge commit absorbed it — is the one
-# case content cannot settle, and the base's merge topology tells those
-# apart. What content cannot prove is a merge the base has since edited
-# over, and there the forge's record settles it: a merged pull request whose
-# head nothing on the branch reaches past. That record is given as -m, with
+# own — never started on, fast-forwarded into the base, or absorbed by a
+# merge commit — is the one case content cannot settle: the base's merge
+# topology tells the third apart, and the first two only an answer from
+# outside the graph can, -m or the forge's record. Content cannot prove a
+# merge the base has since edited over either.
+# There the forge's record settles it: a merged pull request whose head
+# nothing on the branch reaches past. That record is given as -m, with
 # either commit a pull request reports — its head, or its merge commit on
 # the base, against which the content is proven as it stood when merged —
 # or, on GitHub, looked up through gh without being asked.
@@ -67,8 +69,9 @@ from it whose head nothing on the branch reaches past proves it, with no
 -m needed.
 
 Kept, always: the base branch, a branch checked out in any worktree, a
-branch with no commits of its own that no merge absorbed (nobody has
-started on it yet), and any branch holding commits the base does not.
+branch with no commits of its own that no merge absorbed (never started
+on, or fast-forwarded into the base — content cannot tell which, -m with
+its head can), and any branch holding commits the base does not.
 
 Exit status: 0 when every named branch was deleted or, with -n, could be;
 1 when a named branch was kept, or was never found locally or on the
@@ -165,13 +168,13 @@ merged_by_merge_commit() {
 # $forge is that repository or empty. Sets proof on success, else forge_note
 # with why the record did not help.
 forge_merged() {
-    local prs number head ref
-    forge_note=' — if a pull request merged it, pass -m with its head or merge commit'
+    local prs number head ref hint='if it was merged, pass -m with its head or the merge commit'
+    forge_note=" — $hint"
     [ -n "$forge" ] || return 1
     prs=$(gh pr list -R "$forge" --state merged --base "$base" --head "$1" \
             --json number,headRefOid --jq '.[] | "\(.number) \(.headRefOid)"' 2>/dev/null) \
-        || { forge_note=' — gh could not say whether a pull request merged it; pass -m with its head or merge commit'; return 1; }
-    forge_note=' — no merged pull request on GitHub covers it either'
+        || { forge_note=" — gh could not say whether a pull request merged it; $hint"; return 1; }
+    forge_note=" — no merged pull request on GitHub covers it; $hint"
     while read -r number head <&3; do
         [ -n "$head" ] || continue
         # The head may have left this clone with the remote branch; the
@@ -249,7 +252,7 @@ consider() {
                 }
             done
         fi
-        proof="merged as $short on the forge"
+        proof="merged as $short, given with -m"
     else
         reason=''
         for ref in $refs; do
@@ -257,7 +260,7 @@ consider() {
             own=$(git rev-list --count "$remote/$base..$tip") || fail "git rev-list failed on $ref"
             if [ "$own" -eq 0 ]; then
                 merged_by_merge_commit "$tip" \
-                    || { reason="$ref holds no commits of its own and no merge in $remote/$base absorbed it — work has not started on it"; break; }
+                    || { reason="$ref holds nothing $remote/$base does not, and was never started on or fast-forwarded into it, which content cannot settle"; break; }
             else
                 holds "$remote/$base" "$tip" \
                     || { reason="$ref holds changes $remote/$base does not"; break; }
