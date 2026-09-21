@@ -402,10 +402,34 @@ commit local-only
 g checkout --quiet feature
 out=$(run feature)
 if [ "$(g symbolic-ref --quiet --short HEAD)" = main ] && ! has refs/heads/feature \
-    && printf '%s' "$out" | grep -q 'not fast-forwarded'; then
+    && printf '%s' "$out" | grep -q 'diverged'; then
     ok "checked out here, main diverged: left for main, main left as is, branch deleted"
 else
     bad diverged "$out"
+fi
+
+new_repo ahead                            # local main has unpushed commits, origin has none
+land_by_rebase
+commit local-only
+g checkout --quiet feature
+out=$(run feature)
+if [ "$(g symbolic-ref --quiet --short HEAD)" = main ] && ! has refs/heads/feature \
+    && printf '%s' "$out" | grep -q 'ahead of origin/main'; then
+    ok "checked out here, main ahead: left for main and said so, branch deleted"
+else
+    bad ahead "$out"
+fi
+
+new_repo base-elsewhere                   # main checked out in another worktree
+land_by_rebase
+g checkout --quiet feature
+g worktree add --quiet "$dir-wt" main 2>/dev/null
+out=$(run feature); rc=$?
+if [ $rc -eq 1 ] && printf '%s' "$out" | grep -q 'could not be checked out instead' \
+    && [ "$(g symbolic-ref --quiet --short HEAD)" = feature ] && has refs/heads/feature && has refs/remotes/origin/feature; then
+    ok "checked out here, base in another worktree: kept, nothing deleted, git's reason shown"
+else
+    bad base-elsewhere "$out"
 fi
 
 new_repo guard-literal

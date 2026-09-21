@@ -147,10 +147,9 @@ fi
 # exits with a usage error, and patch ids stand in: they prove a rebase but
 # not a squash of several commits, which is then kept.
 holds() {
-    local tree status cherry
+    local tree cherry
     tree=$(git merge-tree --write-tree "$1" "$2" 2>/dev/null)
-    status=$?
-    case $status in
+    case $? in
         0) [ "$tree" = "$(git rev-parse "$1^{tree}")" ] ;;
         1) return 1 ;;
         *) cherry=$(git cherry "$1" "$2") || fail "git cherry failed on $2"
@@ -205,7 +204,7 @@ candidates() {
 # Prove one branch and, unless listing, delete it. Returns 1 when kept or
 # never found, 2 when the name cannot be a branch.
 consider() {
-    local name=$1 refs='' ref tip own proof reason forge_note what after here='' has_local=0 has_remote=0
+    local name=$1 refs='' what='' ref tip own proof reason forge_note after gone here=''
 
     git check-ref-format --branch "$name" >/dev/null 2>&1 \
         || { err "'$name' is not a branch name"; return 2; }
@@ -223,15 +222,18 @@ consider() {
         kept "$name" 'it is checked out in another worktree'; return 1
     fi
 
-    git show-ref --verify --quiet "refs/heads/$name" && has_local=1
-    git show-ref --verify --quiet "refs/remotes/$remote/$name" && has_remote=1
-    if [ "$has_local" -eq 0 ] && [ "$has_remote" -eq 0 ]; then
+    # The refs to prove, and how to name them once they are gone.
+    if git show-ref --verify --quiet "refs/heads/$name"; then
+        refs="refs/heads/$name"; what='the local branch'
+    fi
+    if git show-ref --verify --quiet "refs/remotes/$remote/$name"; then
+        refs="$refs refs/remotes/$remote/$name"; what="${what:+$what and }$remote/$name"
+    fi
+    if [ -z "$refs" ]; then
         # A misspelt name must not read as a cleanup already done.
         printf '! %s: never found, locally or on %s\n' "$name" "$remote" >&2
         return 1
     fi
-    [ "$has_local" -eq 1 ]  && refs="refs/heads/$name"
-    [ "$has_remote" -eq 1 ] && refs="$refs refs/remotes/$remote/$name"
 
     if [ -n "$merged" ]; then
         local merged_tip short
@@ -284,30 +286,34 @@ consider() {
         fi
     fi
 
-    what=''
-    [ "$has_local" -eq 1 ]  && what='the local branch'
-    [ "$has_remote" -eq 1 ] && what="${what:+$what and }$remote/$name"
-
     if [ "$dry_run" -eq 1 ]; then
         say "$name: $proof; would ${here:+check out $base, then }delete $what"
         return 0
     fi
     after=''
     if [ -n "$here" ]; then
-        git checkout --quiet "$base" 2>/dev/null || fail "$name: could not check out $base to leave it"
-        if git merge --ff-only --quiet "$remote/$base" >/dev/null 2>&1; then
+        # git says why when this fails — the base checked out in another
+        # worktree, an untracked file in the way — and the branch stays.
+        git checkout --quiet "$base" \
+            || { kept "$name" "it is checked out here and $base could not be checked out instead"; return 1; }
+        if ! git merge --ff-only --quiet "$remote/$base" >/dev/null 2>&1; then
+            after="; now on $base, which has diverged from $remote/$base and was left as is"
+        elif [ "$(git rev-parse "$base")" = "$(git rev-parse "$remote/$base")" ]; then
             after="; now on $base at $remote/$base"
         else
-            after="; now on $base, not fast-forwarded to $remote/$base as it has commits of its own"
+            after="; now on $base, ahead of $remote/$base"
         fi
     fi
-    if [ "$has_local" -eq 1 ]; then
-        git branch -D "$name" >/dev/null || fail "$name: could not delete the local branch"
-    fi
-    if [ "$has_remote" -eq 1 ]; then
-        git push --quiet "$remote" --delete "$name" || fail "$name: could not delete $remote/$name$(
-            [ "$has_local" -eq 1 ] && printf ' (the local branch is already gone)')"
-    fi
+    gone=''
+    for ref in $refs; do
+        case $ref in
+            refs/heads/*)
+                git branch -D "$name" >/dev/null || fail "$name: could not delete the local branch"
+                gone=' (the local branch is already gone)' ;;
+            *)
+                git push --quiet "$remote" --delete "$name" || fail "$name: could not delete $remote/$name$gone" ;;
+        esac
+    done
     say "$name: $proof; deleted $what$after"
 }
 
