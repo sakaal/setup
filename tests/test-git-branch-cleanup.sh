@@ -368,8 +368,69 @@ out=$(run --help); [ $? -eq 0 ] && printf '%s' "$out" | grep -q '^Usage:' && ok 
 # --- guards -----------------------------------------------------------------
 new_repo guards
 expect_keep "guard: the base branch is refused" 'base branch' main
+
+# --- checked out here: left for the base first, unless in use ---------------
+new_repo checked-out
+land_by_rebase
 g checkout --quiet feature
-expect_keep "guard: a checked-out branch is refused" 'checked out' feature
+expect_accept "checked out here: would leave it for main first" 'check out main, then delete' feature
+echo dirty >> "$dir/work.txt"
+expect_keep "checked out here with uncommitted changes: kept" 'uncommitted changes' feature
+g checkout --quiet -- work.txt
+out=$(run feature)
+if [ "$(g symbolic-ref --quiet --short HEAD)" = main ] && ! has refs/heads/feature \
+    && [ "$(g rev-parse main)" = "$(g rev-parse origin/main)" ] && printf '%s' "$out" | grep -q 'now on main at origin/main'; then
+    ok "checked out here: left for main, main fast-forwarded, branch deleted"
+else
+    bad checked-out "$out"
+fi
+
+new_repo worktree
+land_by_rebase
+g worktree add --quiet "$dir-wt" feature 2>/dev/null
+expect_keep "checked out in another worktree: kept" 'another worktree' feature
+
+new_repo diverged                         # local main has its own commit
+land_by_rebase
+other="$dir-other"
+git clone --quiet "$dir.git" "$other" 2>/dev/null
+git -C "$other" config user.email t@example.com
+git -C "$other" config user.name Test
+echo remote-only > "$other/remote.txt"; git -C "$other" add -A; git -C "$other" commit --quiet -m remote-only
+git -C "$other" push --quiet origin main 2>/dev/null
+commit local-only
+g checkout --quiet feature
+out=$(run feature)
+if [ "$(g symbolic-ref --quiet --short HEAD)" = main ] && ! has refs/heads/feature \
+    && printf '%s' "$out" | grep -q 'diverged'; then
+    ok "checked out here, main diverged: left for main, main left as is, branch deleted"
+else
+    bad diverged "$out"
+fi
+
+new_repo ahead                            # local main has unpushed commits, origin has none
+land_by_rebase
+commit local-only
+g checkout --quiet feature
+out=$(run feature)
+if [ "$(g symbolic-ref --quiet --short HEAD)" = main ] && ! has refs/heads/feature \
+    && printf '%s' "$out" | grep -q 'ahead of origin/main'; then
+    ok "checked out here, main ahead: left for main and said so, branch deleted"
+else
+    bad ahead "$out"
+fi
+
+new_repo base-elsewhere                   # main checked out in another worktree
+land_by_rebase
+g checkout --quiet feature
+g worktree add --quiet "$dir-wt" main 2>/dev/null
+out=$(run feature); rc=$?
+if [ $rc -eq 1 ] && printf '%s' "$out" | grep -q 'could not be checked out instead' \
+    && [ "$(g symbolic-ref --quiet --short HEAD)" = feature ] && has refs/heads/feature && has refs/remotes/origin/feature; then
+    ok "checked out here, base in another worktree: kept, nothing deleted, git's reason shown"
+else
+    bad base-elsewhere "$out"
+fi
 
 new_repo guard-literal
 g checkout --quiet -b fix/v1x2

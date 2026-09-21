@@ -43,7 +43,9 @@ Delete branches that are already merged, local and remote, and only those.
 A branch is deleted when the base branch is proven to hold everything on
 it; otherwise it is kept and the reason is printed. Rebase, squash and
 merge-commit merges are all recognised. A branch that exists only locally
-or only on the remote is handled the same way.
+or only on the remote is handled the same way. One checked out here, with
+a clean tree, is left for the base first, and the base is fast-forwarded
+to the remote where that is possible.
 
   branch...      the branches to consider, in the current repository, one
                  name per operand
@@ -68,8 +70,9 @@ does not prove is checked against the forge itself: a merged pull request
 from it whose head nothing on the branch reaches past proves it, with no
 -m needed.
 
-Kept, always: the base branch, a branch checked out in any worktree, a
-branch with no commits of its own that no merge absorbed (never started
+Kept, always: the base branch, a branch checked out in another worktree
+or here with uncommitted changes, a branch with no commits of its own that
+no merge absorbed (never started
 on, or fast-forwarded into the base — content cannot tell which, -m with
 its head can), and any branch holding commits the base does not.
 
@@ -144,10 +147,9 @@ fi
 # exits with a usage error, and patch ids stand in: they prove a rebase but
 # not a squash of several commits, which is then kept.
 holds() {
-    local tree status cherry
+    local tree cherry
     tree=$(git merge-tree --write-tree "$1" "$2" 2>/dev/null)
-    status=$?
-    case $status in
+    case $? in
         0) [ "$tree" = "$(git rev-parse "$1^{tree}")" ] ;;
         1) return 1 ;;
         *) cherry=$(git cherry "$1" "$2") || fail "git cherry failed on $2"
@@ -202,26 +204,36 @@ candidates() {
 # Prove one branch and, unless listing, delete it. Returns 1 when kept or
 # never found, 2 when the name cannot be a branch.
 consider() {
-    local name=$1 refs='' ref tip own proof reason forge_note what has_local=0 has_remote=0
+    local name=$1 refs='' what='' ref tip own proof reason forge_note after gone here=''
 
     git check-ref-format --branch "$name" >/dev/null 2>&1 \
         || { err "'$name' is not a branch name"; return 2; }
     [ "$name" != "$base" ] || { kept "$name" 'it is the base branch'; return 1; }
 
-    # Any worktree, not just this one: a branch checked out elsewhere is in use.
-    if git worktree list --porcelain | grep -xF "branch refs/heads/$name" >/dev/null; then
-        kept "$name" 'it is checked out in a worktree'; return 1
+    # Checked out here with a clean tree, the branch can be left for the base
+    # before it goes; with changes, or checked out in another worktree, it is
+    # in use.
+    if [ "$(git symbolic-ref --quiet --short HEAD)" = "$name" ]; then
+        if ! { git diff --quiet && git diff --cached --quiet; }; then
+            kept "$name" 'it is checked out here with uncommitted changes'; return 1
+        fi
+        here=1
+    elif git worktree list --porcelain | grep -xF "branch refs/heads/$name" >/dev/null; then
+        kept "$name" 'it is checked out in another worktree'; return 1
     fi
 
-    git show-ref --verify --quiet "refs/heads/$name" && has_local=1
-    git show-ref --verify --quiet "refs/remotes/$remote/$name" && has_remote=1
-    if [ "$has_local" -eq 0 ] && [ "$has_remote" -eq 0 ]; then
+    # The refs to prove, and how to name them once they are gone.
+    if git show-ref --verify --quiet "refs/heads/$name"; then
+        refs="refs/heads/$name"; what='the local branch'
+    fi
+    if git show-ref --verify --quiet "refs/remotes/$remote/$name"; then
+        refs="$refs refs/remotes/$remote/$name"; what="${what:+$what and }$remote/$name"
+    fi
+    if [ -z "$refs" ]; then
         # A misspelt name must not read as a cleanup already done.
         printf '! %s: never found, locally or on %s\n' "$name" "$remote" >&2
         return 1
     fi
-    [ "$has_local" -eq 1 ]  && refs="refs/heads/$name"
-    [ "$has_remote" -eq 1 ] && refs="$refs refs/remotes/$remote/$name"
 
     if [ -n "$merged" ]; then
         local merged_tip short
@@ -274,22 +286,35 @@ consider() {
         fi
     fi
 
-    what=''
-    [ "$has_local" -eq 1 ]  && what='the local branch'
-    [ "$has_remote" -eq 1 ] && what="${what:+$what and }$remote/$name"
-
     if [ "$dry_run" -eq 1 ]; then
-        say "$name: $proof; would delete $what"
+        say "$name: $proof; would ${here:+check out $base, then }delete $what"
         return 0
     fi
-    if [ "$has_local" -eq 1 ]; then
-        git branch -D "$name" >/dev/null || fail "$name: could not delete the local branch"
+    after=''
+    if [ -n "$here" ]; then
+        # git says why when this fails — the base checked out in another
+        # worktree, an untracked file in the way — and the branch stays.
+        git checkout --quiet "$base" \
+            || { kept "$name" "it is checked out here and $base could not be checked out instead"; return 1; }
+        if ! git merge --ff-only --quiet "$remote/$base" >/dev/null 2>&1; then
+            after="; now on $base, which has diverged from $remote/$base and was left as is"
+        elif [ "$(git rev-parse "$base")" = "$(git rev-parse "$remote/$base")" ]; then
+            after="; now on $base at $remote/$base"
+        else
+            after="; now on $base, ahead of $remote/$base"
+        fi
     fi
-    if [ "$has_remote" -eq 1 ]; then
-        git push --quiet "$remote" --delete "$name" || fail "$name: could not delete $remote/$name$(
-            [ "$has_local" -eq 1 ] && printf ' (the local branch is already gone)')"
-    fi
-    say "$name: $proof; deleted $what"
+    gone=''
+    for ref in $refs; do
+        case $ref in
+            refs/heads/*)
+                git branch -D "$name" >/dev/null || fail "$name: could not delete the local branch"
+                gone=' (the local branch is already gone)' ;;
+            *)
+                git push --quiet "$remote" --delete "$name" || fail "$name: could not delete $remote/$name$gone" ;;
+        esac
+    done
+    say "$name: $proof; deleted $what$after"
 }
 
 # One repository, in a subshell so its cwd and base stay its own. Returns the
