@@ -154,10 +154,20 @@ new_repo fresh
 g checkout --quiet -b fresh-idea
 g push --quiet -u origin fresh-idea 2>/dev/null
 g checkout --quiet main
-expect_keep "fresh: a branch with no commits is kept" 'has not started' fresh-idea
+expect_keep "fresh: a branch with no commits is kept" 'never started on' fresh-idea
 commit later
 g push --quiet origin main 2>/dev/null
-expect_keep "fresh: still kept once the base has moved on" 'has not started' fresh-idea
+expect_keep "fresh: still kept once the base has moved on" 'never started on' fresh-idea
+
+# --- fast-forwarded: the same shape as fresh, told from it only by -m -------
+new_repo fastforward
+g checkout --quiet -b ff main
+commit ff-work
+g checkout --quiet main
+g merge --quiet --ff-only ff >/dev/null
+g push --quiet origin main 2>/dev/null
+expect_keep "fast-forward: kept, since content cannot tell it from a fresh branch" 'fast-forwarded' ff
+expect_accept "fast-forward: -m with its head, which is on the base, proves it" 'on the forge' -m "$(g rev-parse ff)" ff
 
 # --- base moved across the branch's lines after the merge: doubt, unless -m -
 new_repo conflict
@@ -366,7 +376,7 @@ g checkout --quiet -b fix/v1x2
 g checkout --quiet -b fix/v1.2
 g push --quiet -u origin fix/v1.2 2>/dev/null
 g checkout --quiet fix/v1x2
-expect_keep "guard: a dot in the name is not a wildcard" 'has not started' fix/v1.2
+expect_keep "guard: a dot in the name is not a wildcard" 'never started on' fix/v1.2
 
 printf '\n%d passed, %d failed\n' "$pass" "$fail"
 [ "$fail" -eq 0 ]
