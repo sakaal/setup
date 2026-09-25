@@ -12,7 +12,7 @@
 #
 # Manually triggered. Not part of the unattended bootstrap path.
 
-set -euo pipefail
+set -uo pipefail
 
 VAULT="Setup Keys"
 ITEM="github-pat"
@@ -65,10 +65,10 @@ fi
 
 echo "Opening GitHub Personal Access Token creation page..."
 echo "URL: ${PAT_URL}"
-if command -v open >/dev/null 2>&1; then
-  open "${PAT_URL}"
-elif command -v xdg-open >/dev/null 2>&1; then
-  xdg-open "${PAT_URL}"
+if command -v open >/dev/null 2>&1 && open "${PAT_URL}" 2>/dev/null; then
+  :
+elif command -v xdg-open >/dev/null 2>&1 && xdg-open "${PAT_URL}" 2>/dev/null; then
+  :
 else
   echo "(open the URL manually in your browser)"
 fi
@@ -77,7 +77,7 @@ fi
 
 echo
 printf 'Paste the new PAT, then press Enter (input hidden): '
-IFS= read -rs PAT
+IFS= read -rs PAT || PAT=""
 echo
 
 if [ -z "${PAT}" ]; then
@@ -98,7 +98,8 @@ if pass-cli item view --vault-name "${VAULT}" --item-title "${ITEM}" >/dev/null 
   pass-cli item update \
     --vault-name "${VAULT}" \
     --item-title "${ITEM}" \
-    --field "password=${PAT}"
+    --field "password=${PAT}" \
+    || { err "Updating ${VAULT}/${ITEM} in Pass failed; nothing stored."; exit 1; }
 else
   # First-time creation: derive username from the new PAT.
   GH_USERNAME="$(curl -fsSL -H "Authorization: token ${PAT}" https://api.github.com/user 2>/dev/null \
@@ -112,7 +113,8 @@ else
     --vault-name "${VAULT}" \
     --title "${ITEM}" \
     --username "${GH_USERNAME}" \
-    --password "${PAT}"
+    --password "${PAT}" \
+    || { err "Creating ${VAULT}/${ITEM} in Pass failed; nothing stored."; exit 1; }
 fi
 
 PAT=""
