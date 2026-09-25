@@ -116,6 +116,25 @@
     - workspace_git_stat.stat.exists
     - workspace_remote_ok | default(false)
 
+# A case-3 run that stopped after `git init` + `remote add` (e.g. the fetch
+# failed) leaves a .git with the right origin but no commit checked out. Case 1
+# would accept that silently forever, so an unborn HEAD resumes the lay-down
+# steps below instead.
+- name: Check whether ~/{{ workspace_dir }} has a commit checked out
+  ansible.builtin.command:
+    cmd: git -C "{{ home_dir }}/{{ workspace_dir }}" rev-parse --verify --quiet HEAD
+  register: workspace_head_commit
+  changed_when: false
+  failed_when: false
+  check_mode: false
+  when: workspace_git_stat.stat.exists
+
+- name: Decide whether the working tree still needs laying down
+  ansible.builtin.set_fact:
+    workspace_lay: >-
+      {{ not workspace_git_stat.stat.exists
+         or workspace_head_commit.rc | default(0) != 0 }}
+
 # Case 3 — lay non-destructively onto the workspace dir.
 - name: Ensure ~/{{ workspace_dir }} exists (no mode change if already there)  # noqa: risky-file-permissions
   ansible.builtin.file:
@@ -138,19 +157,19 @@
 - name: Fetch {{ workspace_branch | default('the default branch') }} from origin (case 3)
   ansible.builtin.command:
     cmd: git -C "{{ home_dir }}/{{ workspace_dir }}" fetch origin "{{ workspace_branch }}"
-  when: not workspace_git_stat.stat.exists
+  when: workspace_lay | bool
   changed_when: true
 
 - name: Check out the default branch (lays files non-destructively)
   ansible.builtin.command:
     cmd: git -C "{{ home_dir }}/{{ workspace_dir }}" checkout -B "{{ workspace_branch }}" "origin/{{ workspace_branch }}"
-  when: not workspace_git_stat.stat.exists
+  when: workspace_lay | bool
   changed_when: true
 
 - name: Set upstream tracking on the default branch
   ansible.builtin.command:
     cmd: git -C "{{ home_dir }}/{{ workspace_dir }}" branch --set-upstream-to="origin/{{ workspace_branch }}" "{{ workspace_branch }}"
-  when: not workspace_git_stat.stat.exists
+  when: workspace_lay | bool
   changed_when: true
 
 ...
