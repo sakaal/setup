@@ -59,7 +59,7 @@ export PATH="$tmp/bin:$PATH"
 # to the original and the rebase cases stop being rebases.
 new_repo() {
     dir="$tmp/$1"
-    git init --quiet --bare "$dir.git"
+    git init --quiet --bare -b main "$dir.git"
     git init --quiet -b main "$dir"
     g config user.email t@example.com
     g config user.name Test
