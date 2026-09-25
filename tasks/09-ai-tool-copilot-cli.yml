@@ -26,6 +26,9 @@
         url: https://api.github.com/repos/github/copilot-cli/releases/latest
         return_content: true
       register: copilot_latest
+      # Read-only GET; uri has no check-mode support, so under --check it would
+      # be skipped and the asset lookup below would fail on the missing json.
+      check_mode: false
       when: not copilot_binary.stat.exists
 
     - name: Assert a supported Linux architecture for the Copilot CLI
