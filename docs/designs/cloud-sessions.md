@@ -28,7 +28,7 @@ threat model:
 | | Local host | Cloud session |
 |---|---|---|
 | Entry | `setup.sh` one-liner, run by the operator | stub in the platform's setup-script field |
-| Runs | on demand, operator present | at container build, unattended |
+| Runs | on demand, operator present | at environment build and each session start, unattended |
 | Secrets | Proton Pass, then Ansible Vault | none |
 | GitHub access | SSH key and PAT from Pass | the platform's authenticated proxy |
 | Installs | tools, packages, credentials | nothing |
@@ -67,10 +67,34 @@ changes only to move to a newer tag.
    HTTPS equivalent. `WORKSPACE_DIR` overrides the directory name as on the
    local host.
 3. Deploy `agent-map.json` into the hub and run the shared wiring engine
-   (below) from the setup clone.
-4. Report each outcome as `→` / `!` / `✗` lines and exit 0 on every path, so a
+   (below) from the setup clone, which also registers the session-start
+   refresh (CLOUD-REFRESH).
+4. Check the expected credential variables (CLOUD-CREDENTIALS).
+5. Report each outcome as `→` / `!` / `✗` lines and exit 0 on every path, so a
    problem is visible in the platform's setup log without blocking the
    session.
+
+**CLOUD-REFRESH**: Every session start runs `cloud.sh` again, from the setup
+clone, through the owning tool's session-start hook; the platform runs the
+setup script only when it builds an environment, and may reuse a built
+environment across sessions, so without the refresh the workspace clone lags
+the repo. The run is the same idempotent sequence: it fast-forwards both
+clones (the setup clone stays at `SETUP_REF`), re-applies the wiring, and
+re-checks the credentials, with network steps bounded by a timeout so a slow
+host delays the session only briefly. The hub links into the workspace clone,
+so the fast-forward refreshes every tool at once. Instructions a tool loads
+before its session-start hook runs take effect from the following session;
+files the agent reads on demand, such as the rules, are current at once.
+
+The hook is registered by a distribute entry per tool in `agent-map.json`:
+class `session-start`, method `generate`, with an `ai-sync` emitter for the
+tool's settings format (for Claude Code, a `SessionStart` hook matching
+`startup` and `resume` in `~/.claude/settings.json`). The entry carries
+`targets: ["cloud"]`; an entry without `targets` applies to both targets, and
+the local host, where the workspace clone is the operator's working copy,
+receives no refresh hook. A platform that skips session-start hooks — Claude
+Code on the web documents this for sessions with more than one repository —
+still gets the build-time run.
 
 ## Shared wiring engine
 
@@ -121,9 +145,41 @@ operator separates identity contexts: one environment per context (personal,
 each employer), each authoring under its own name.
 
 The values are personal content, so this repo names the variables and nothing
-more; the README's cloud section shows them with placeholders. `cloud.sh`
-reports a warning when the variables are unset, since commits would then carry
-the platform's identity.
+more; the README's cloud section shows them with placeholders. The four names
+are always among the expected credentials (CLOUD-CREDENTIALS), since commits
+without them carry the platform's identity.
+
+**CLOUD-CREDENTIALS**: Each run names every expected credential variable the
+environment lacks, so the operator learns at session start which requests will
+fail for want of access, and which variable to add, before making one. The
+expected set is the four identity variables plus the names the workspace repo
+declares in a `.env.example` at its root, the dotenv convention for listing a
+project's variables; the platform's environment-variable field takes the same
+`NAME=value` format, so the file doubles as the checklist for filling it in.
+Each declaration is a `NAME=` line, and the comment line directly above it
+states what the credential grants:
+
+```
+# GitHub API for the gh CLI (read-only token)
+GH_TOKEN=
+```
+
+A variable counts as present when it is set and non-empty. The check reads
+presence only: no value is printed, logged or compared. Each missing one is
+reported as `! missing credential NAME — <comment>`. A declaration line carrying
+a value is reported as an error, without echoing the value, because the file is
+committed; a line whose name is not a valid variable name is reported and
+skipped. Each environment points at its own workspace repo, so each identity
+context declares its own expected set.
+
+The report reaches two readers. The build-time run writes it to the platform's
+setup log. The session-start run returns it to the owning tool as context for
+the agent, which is the documented channel (for Claude Code, the hook's
+`additionalContext`), and as a user-facing message where the client displays
+one. With the missing names in context, the agent tells the operator at the
+start of the session and names the missing variable when a request depends on
+it. A variable added in the environment's settings reaches sessions started
+afterwards, whose check then passes.
 
 **CLOUD-WORKSPACE-REPO**: The workspace repo defaults to the same repo as on
 the local host (`workspace_repo` in `setup.yml`), overridden by the stub's
@@ -134,7 +190,7 @@ positional argument.
 How the cloud target keeps each invariant in `AGENTS.md`:
 
 1. **Single source for secrets** — it consumes no secrets; GitHub access is the
-   platform's.
+   platform's, and the credential check reads only whether a variable is set.
 2. **Non-destructive & idempotent** — the same detect → decide → never-clobber
    decision table; re-running changes only what is missing or stale.
 3. **Anchor only upstream** — it depends on the git host and the hosting
@@ -148,10 +204,11 @@ How the cloud target keeps each invariant in `AGENTS.md`:
 7. **Personal scale** — severity-tagged console output only.
 8. **Data-driven where open-ended** — tools and their wiring come from
    `agent-map.json`; no tool is named in `cloud.sh`.
-9. **Complete, lane-categorized coverage** — unchanged: the manifest describes
-   the tools, not the targets. Harvest has nothing to collect in a cloud
-   session, since the container, with every store the tools kept in it, is
-   discarded when the session ends.
+9. **Complete, lane-categorized coverage** — each tool's session-start hook
+   joins the distribute lane as a cloud-only entry; every other entry applies
+   to both targets. Harvest has nothing to collect in a cloud session, since
+   the container, with every store the tools kept in it, is discarded when the
+   session ends.
 
 The mission statement in `AGENTS.md` and the README's overview widen from "a
 fresh personal Mac or Linux machine" to include cloud sessions.
@@ -159,29 +216,36 @@ fresh personal Mac or Linux machine" to include cloud sessions.
 ## Changes
 
 - `cloud.sh` — the cloud entry point, beside `setup.sh`.
-- `files/ai-sync` — hub build and the `link`/`import` methods; a conflict
-  yields a non-zero exit.
+- `files/ai-sync` — hub build, the `link`/`import` methods, a session-start
+  hook emitter, and target selection; a conflict yields a non-zero exit.
+- `files/agent-map.json` — the `session-start` class, the `targets` field in
+  the legend, and a hook entry per tool that offers one.
 - `tasks/09-ai-config.yml`, `tasks/09-ai-sync.yml`, `tasks/09-ai-wire-one.yml`
   — hub and wiring replaced by a call to `ai-sync`; tool installs and deploys
   unchanged.
-- `tests/test-ai-sync.sh` — the decision table and the hub build, in a mktemp
-  home, alongside the existing script tests.
+- `tests/test-ai-sync.sh` — the decision table, the hub build, target
+  selection and the hook emitter, in a mktemp home, alongside the existing
+  script tests.
+- `tests/test-cloud.sh` — the credential check (missing, present, a committed
+  value, an invalid name) with no value ever in the output.
 - `AGENTS.md` and `README.md` — the two targets, the cloud stub, and the
   identity variables.
+- The workspace repo — a `.env.example` declaring its expected credentials,
+  and its whitelist entry in `.gitignore`.
 
 ## Open questions
-
-**OPEN-FRESHNESS**: The platform may reuse a built environment across sessions,
-and the setup script runs only when the environment is built, so the workspace
-clone can lag the repo. The hub links into the clone, so a fast-forward
-refreshes every tool at once. Whether that fast-forward also needs to run at
-each session start — through a session-start hook the platform offers — is
-open.
 
 **OPEN-MCP**: The `mcp.json` servers are configured for the local host and may
 depend on binaries or credentials a container lacks; wiring them into a cloud
 session would start servers that fail. Whether the cloud target skips the MCP
-entries, or the manifest marks servers per target, is open.
+entries, or the manifest marks servers per target with `targets`, is open. If
+the cloud target wires a server, the variables its `env` entries reference
+join the expected credentials.
 
-**OPEN-ENTRY-NAME**: `cloud.sh` names the entry point by its target; whether
-another name serves better beside `setup.sh` is open.
+**OPEN-USER-SETTINGS**: CLOUD-REFRESH relies on the owning tool honouring
+user-level settings that the setup script writes inside the container before
+the tool starts. Claude Code's documentation states that the operator's own
+machine-level settings do not carry over to cloud sessions, and does not cover
+a settings file created inside the container. The first implementation step
+verifies it; if the tool ignores such a file, the refresh has no hook, and the
+build-time run remains the only one.
