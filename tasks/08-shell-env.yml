@@ -1,6 +1,7 @@
 ---
-# 08-shell-env.yml — machine-local shell environment: ~/.local/bin on PATH, and
-# the GitHub Copilot CLI pointed at the shared AI hub. Both are plain shell env,
+# 08-shell-env.yml — machine-local shell environment: ~/.local/bin on PATH, the
+# GitHub Copilot CLI pointed at the shared AI hub, and the distillation tools
+# (ai-distill, the distill plugin) pointed at the workspace. All plain shell env,
 # written to .zshenv (zsh) and .bashrc (bash) so they persist across shells and
 # take effect for EVERY zsh — login, interactive, and non-interactive alike, so
 # a tool that spawns a plain `zsh -c` still gets them. Not set once by Ansible;
@@ -44,6 +45,24 @@
         *",$HOME/.config/ai,"*) ;;
         *) export COPILOT_CUSTOM_INSTRUCTIONS_DIRS="${COPILOT_CUSTOM_INSTRUCTIONS_DIRS:+$COPILOT_CUSTOM_INSTRUCTIONS_DIRS,}$HOME/.config/ai" ;;
       esac
+  loop:
+    - .zshenv
+    - .bashrc
+
+# ai-distill and the distill plugin's guard hook locate the workspace repo
+# through AI_WORKSPACE_DIR; unset, they fall back to ~/workspace, which is wrong
+# whenever the workspace landed elsewhere (a different repo basename, or a
+# WORKSPACE_DIR override). An operator-set value is kept.
+- name: Point the distillation tools at the workspace (zsh and bash startup files)
+  ansible.builtin.blockinfile:
+    path: "{{ home_dir }}/{{ item }}"
+    create: true
+    mode: "0644"
+    marker: "# {mark} ANSIBLE MANAGED — AI workspace dir"
+    block: |
+      # ai-distill and the distill plugin read the workspace repo's location from here
+      : "${AI_WORKSPACE_DIR:=$HOME/{{ workspace_dir }}}"
+      export AI_WORKSPACE_DIR
   loop:
     - .zshenv
     - .bashrc

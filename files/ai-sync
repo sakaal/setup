@@ -18,6 +18,7 @@
 import json
 import os
 import re
+import stat
 import sys
 
 for _stream in (sys.stdout, sys.stderr):
@@ -60,17 +61,34 @@ def mcp_servers_from(source_path):
 
 
 def write_atomic(path, text):
+    # Write through a symlink to its target (a dotfile-managed config stays
+    # linked) and keep an existing file's mode (e.g. a 0600 ~/.claude.json),
+    # rather than replacing either with a fresh umask-default regular file.
+    path = os.path.realpath(path)
+    try:
+        mode = stat.S_IMODE(os.stat(path).st_mode)
+    except FileNotFoundError:
+        mode = None
     tmp = path + ".ai-sync.tmp"
     with open(tmp, "w", encoding="utf-8") as fh:
         fh.write(text)
+    if mode is not None:
+        os.chmod(tmp, mode)
     os.replace(tmp, path)
+
+
+def toml_str(value):
+    # A TOML basic string. JSON escaping is TOML-compatible except that JSON
+    # leaves DEL raw and, with ensure_ascii, splits astral characters into
+    # surrogate-pair escapes, which TOML rejects.
+    return json.dumps(value, ensure_ascii=False).replace("\x7f", "\\u007F")
 
 
 def toml_key(name):
     # Bare TOML keys allow only A-Za-z0-9_-; anything else must be quoted.
     if re.fullmatch(r"[A-Za-z0-9_-]+", name):
         return name
-    return json.dumps(name)
+    return toml_str(name)
 
 
 # ── Emitters: (entry, source_path) -> mutate entry's target file ──────────
@@ -110,18 +128,36 @@ def emit_mcp_json(entry, source_path):
         changed.append("%s (+%d server(s))" % (path, added))
 
 
+# Server fields this emitter knows how to translate; a spec carrying any other
+# field (headers, auth, …) is reported and skipped rather than written without
+# it, since a partial table can silently drop what the server needs.
+TOML_FIELDS = {"type", "command", "args", "env", "cwd", "url"}
+
+
 def render_toml_table(name, spec):
-    lines = ["[mcp_servers.%s]" % toml_key(name)]
-    if "command" in spec:
-        lines.append("command = %s" % json.dumps(spec["command"]))
-    if isinstance(spec.get("args"), list):
-        lines.append("args = %s" % json.dumps(spec["args"]))
-    env = spec.get("env")
-    if isinstance(env, dict) and env:
-        lines.append("[mcp_servers.%s.env]" % toml_key(name))
-        for env_key in env:
-            lines.append("%s = %s" % (toml_key(env_key), json.dumps(env[env_key])))
-    return "\n".join(lines)
+    """The [mcp_servers.<name>] table for one server, or None when the spec
+    can't be expressed faithfully (no command/url, or untranslated fields)."""
+    if not isinstance(spec, dict) or set(spec) - TOML_FIELDS:
+        return None
+    if isinstance(spec.get("command"), str):
+        lines = ["[mcp_servers.%s]" % toml_key(name),
+                 "command = %s" % toml_str(spec["command"])]
+        if isinstance(spec.get("args"), list):
+            lines.append("args = [%s]" % ", ".join(toml_str(str(a))
+                                                   for a in spec["args"]))
+        if isinstance(spec.get("cwd"), str):
+            lines.append("cwd = %s" % toml_str(spec["cwd"]))
+        env = spec.get("env")
+        if isinstance(env, dict) and env:
+            lines.append("[mcp_servers.%s.env]" % toml_key(name))
+            for env_key in env:
+                lines.append("%s = %s" % (toml_key(env_key),
+                                          toml_str(str(env[env_key]))))
+        return "\n".join(lines)
+    if isinstance(spec.get("url"), str):
+        return "\n".join(["[mcp_servers.%s]" % toml_key(name),
+                          "url = %s" % toml_str(spec["url"])])
+    return None
 
 
 def emit_mcp_toml(entry, source_path):
@@ -142,11 +178,17 @@ def emit_mcp_toml(entry, source_path):
     additions = []
     for name, spec in servers.items():
         header = re.compile(r"(?m)^\s*\[mcp_servers\.(?:%s|%s)\]"
-                            % (re.escape(name), re.escape(json.dumps(name))))
+                            % (re.escape(name), re.escape(toml_str(name))))
         if header.search(text):
             insync.append("%s: %s" % (path, name))
+            continue
+        table = render_toml_table(name, spec)
+        if table is None:
+            conflicts.append("%s: %s cannot be rendered as TOML (needs a command"
+                             " or url, and only %s) — left out"
+                             % (path, name, ", ".join(sorted(TOML_FIELDS))))
         else:
-            additions.append(render_toml_table(name, spec))
+            additions.append(table)
     if additions:
         if text and not text.endswith("\n"):
             text += "\n"
