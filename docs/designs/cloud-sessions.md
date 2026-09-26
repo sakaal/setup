@@ -117,10 +117,12 @@ one engine, `ai-sync`, shared by both scenarios. At v2.6.0 the work is split:
 `ai-sync` absorbs the hub build and the `link`/`import` methods with the same
 decision table stage 09 applies: an absent path, or an empty file, is created;
 the correct link or stub is a no-op; anything else is a conflict, reported and
-never touched. Stage 09 keeps installing the tools and deploying `ai-sync`,
-`ai-harvest`, `ai-distill` and the manifest, then calls `ai-sync` and halts
-when it reports a conflict. `cloud.sh` calls the same `ai-sync` and reports its
-conflicts, still exiting 0.
+never touched. Such a wiring conflict makes `ai-sync` exit 2; a render conflict
+(a divergent MCP server, say) is reported without changing the exit status.
+Stage 09 keeps installing the tools and deploying `ai-sync`, `ai-harvest`,
+`ai-distill` and the manifest, then calls `ai-sync` and halts on a wiring
+conflict. `cloud.sh` calls the same `ai-sync` and reports its conflicts, still
+exiting 0.
 
 Tool selection stays data-driven: an entry applies when its tool's `detect`
 directory exists and its `scenarios` include the running one, so a container is
@@ -158,6 +160,11 @@ resume does not re-run the setup script. The precedence also scopes the
 identity to the environment, which matches how an operator separates identity
 contexts: one environment per context (personal, each employer), each authoring
 under its own name.
+
+On the local host, stage 07 applies the identity the workspace manifest
+declares (`config.user` in `workspace.repos`) to git's configuration files; in
+a cloud session the platform's rewrite would undo that, so the environment
+carries the identity instead.
 
 The values are personal content, so this repo names the variables and nothing
 more; the README's cloud section shows them with placeholders. The four are
@@ -234,7 +241,7 @@ fresh personal Mac or Linux machine" to include cloud sessions.
 
 - `cloud.sh` — the cloud entry point, beside `setup.sh`.
 - `files/ai-sync` — hub build, the `link`/`import` methods, a session-start
-  hook emitter, and scenario selection; a conflict yields a non-zero exit.
+  hook emitter, and scenario selection; a wiring conflict exits 2.
 - `files/agent-map.json` — the `session-start` class and the `scenarios` field
   in the legend, a hook entry per tool that offers one, and `scenarios:
   ["local"]` on the MCP entries.

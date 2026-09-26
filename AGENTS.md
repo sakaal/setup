@@ -9,7 +9,8 @@ it (the repo dogfooding the very pattern it ships).
 
 **Mission.** One command turns a fresh personal Mac or Linux machine into the
 operator's full development environment — tools, credentials, project repos,
-and AI-assistant configuration — and re-running it is always safe.
+and AI-assistant configuration — and another gives a hosted AI agent's cloud
+session the same AI-assistant configuration; re-running either is always safe.
 
 These invariants generate the design; keep them true. Everything below is how
 they are realized here, and cites them rather than restating them.
@@ -127,6 +128,23 @@ standard operations. The entry transport is curl (so the one-liner needs no
 git); once running we install CLT (whose git suffices for the clone) and use it.
 Tag pinning and GPG-signed tags then work via standard git.
 
+## Cloud sessions
+
+The second operating scenario, specified in `docs/designs/cloud-sessions.md`:
+a hosted AI agent's container whose platform runs an operator-supplied setup
+script. Its field holds a pinned one-liner that fetches `cloud.sh`, which clones
+setup into `$SETUP_DIR` and re-runs from there — never from the working
+directory, which in a cloud session may be the agent's own checkout of this
+repo. `cloud.sh` delivers only the AI-assistant configuration: it clones the
+workspace repo over HTTPS (the platform authenticates it), runs `ai-sync
+--scenario cloud`, and names every expected environment variable the
+environment lacks — the four `GIT_AUTHOR_*`/`GIT_COMMITTER_*` identity
+variables plus those the workspace repo declares in `.env.example` — reading
+presence only. It consumes no secrets, installs nothing, and always exits 0.
+The wiring registers `cloud.sh --session-start` as the owning tool's
+session-start hook, which repeats the run and returns its warnings to the agent
+as JSON context.
+
 ## Location independence (realizes 4)
 
 All playbook deploy targets are absolute (`$HOME/<workspace_dir>/`, `$HOME/.ssh/`,
@@ -142,7 +160,8 @@ own directory, use `$SCRIPT_DIR` (resolved early in `setup.sh`).
 The enrolled tools are installed by `tasks/09-ai-tools.yml`, which imports one
 file per tool (`09-ai-tool-<name>.yml`) — each an idempotent, install-if-missing
 step preferring the tool's official installer — immediately before
-`09-ai-config.yml`. The configuration stage wires a tool once its config
+`09-ai-config.yml`. The configuration stage deploys the manifest and runs
+`ai-sync`, which wires a tool once its config
 directory exists (which its `detect` entry keys on), so wiring lands the same
 run for a tool whose installer creates that directory and the next run
 otherwise; the playbook is idempotent either way. A tool may also be enrolled
@@ -152,20 +171,25 @@ script): its wiring then lands the first run its `detect` dir appears.
 `agent-map.json` is the authoritative, data-driven sync manifest: entries are
 grouped by **lane** (`distribute` / `harvest` / `non-reusable`); each
 distribute entry carries its path, `sync` method
-(`link`/`import`/`generate`/`wrap`/`ignore`), and — where it has a working
-hook — a `source`/`format`. The manifest also defines the `scope`/`subscope`
-vocabulary (`user`/`workspace`, `:path`) and the `{slug}` placeholder
-convention (path values are RFC 6570-style URI templates); that legend is
-authoritative, so consult it rather than duplicating it here.
+(`link`/`import`/`generate`/`wrap`/`ignore`), and — where it has a working hook
+— a `source`/`format`, and optionally the `scenarios` it applies to
+(`local`/`cloud`; both when absent). The manifest also defines the
+`scope`/`subscope` vocabulary (`user`/`workspace`, `:path`) and the `{slug}`
+placeholder convention (path values are RFC 6570-style URI templates); that
+legend is authoritative, so consult it rather than duplicating it here.
 
 Shared, agent-neutral content (`AGENTS.md`, `mcp.json`, and future
 `commands/`, `skills/`, `agents/`, `rules/`) lives in the private workspace
 repo's `ai/`; `~/.config/ai/` is a stable hub of symlinks to it, and tools
 are wired to the hub.
 
-**distribute.** Both the playbook (stage 09, via `include_vars`) and
-`~/bin/ai-sync` (stdlib `json`) read this lane, matching scope by its base
-(`user`), and loop generically — no tool is enumerated in code.
+**distribute.** `ai-sync` (stdlib `json`) is the one engine for this lane, run
+by stage 09 on the local host and by `cloud.sh` in a cloud session. It builds
+the hub, lays the `link`/`import` entries and renders the `generate`/`wrap`
+formats, matching scope by its base (`user`) and the running scenario, and
+loops generically — no tool is enumerated in code. A wiring conflict (a hub,
+link or stub path holding other content) exits 2, and stage 09 halts on it; a
+render conflict is reported.
 
 *Reference in place, don't copy.* The default is to point a tool at the
 shared source where it already lives — a symlink (`link`) to the hub at user
@@ -280,9 +304,9 @@ PAT mint, generation choices) belong here, not in `setup.sh`.
   one stage via `--tags <name> --check -e skip_credentials=true` (tags in
   `setup.yml`; stage 01 is `always`-tagged and otherwise calls pass-cli), never
   a full run.
-- **`files/ai-distill` / `files/ai-harvest` / `files/git-branch-cleanup`**:
-  `bash tests/test-<name>.sh` — self-contained in a mktemp dir, safe to run
-  as-is.
+- **`files/ai-distill` / `files/ai-harvest` / `files/ai-sync` /
+  `files/git-branch-cleanup` / `cloud.sh`**: `bash tests/test-<name>.sh` —
+  self-contained in a mktemp dir, safe to run as-is.
 
 ## Releases
 

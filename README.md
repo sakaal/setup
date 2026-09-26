@@ -16,6 +16,10 @@ anything.
 Your agent brief stays private: the instructions and server list live in
 your own repo, not in public dotfiles — this repo ships only the mechanism.
 
+The same brief reaches your agents' cloud sessions: one line in a hosted
+agent's setup-script field wires its container too. See
+[Cloud sessions](#cloud-sessions).
+
 It also closes the loop: a harvest-and-distill workflow turns what your
 agents *learn* — the memories and notes they accumulate as you work — back
 into that shared brief, as reusable, generalized instructions. See
@@ -157,15 +161,72 @@ find) its own clone, and is ignored when you run from a working copy.
    (instructions) and `ai/mcp.json` (MCP server list) — live in the private
    workspace repo, not here; `~/.config/ai/` holds stable symlinks to them.
    A single data-driven manifest, `agent-map.json`, maps every tool/class to
-   its path and sync method; both the playbook and `~/bin/ai-sync` read it and
-   loop generically, so adding a tool is a manifest edit, not code. Present
-   tools are pointed at the hub via symlink/`@import` stub, and `ai-sync`
-   renders the MCP list into each tool's own format — add-only, never
-   overwriting existing entries. Companions `~/bin/ai-harvest` and
+   its path and sync method; `~/bin/ai-sync`, run by the playbook, reads it
+   and loops generically, so adding a tool is a manifest edit, not code. It
+   points present tools at the hub via symlink/`@import` stub and renders the
+   MCP list into each tool's own format — add-only, never overwriting existing
+   entries. Companions `~/bin/ai-harvest` and
    `~/bin/ai-distill` (deployed, never run by the bootstrap) support the
    learning loop — cataloging each tool's accumulated knowledge and distilling
    it back into the shared sources under human review. See
    [Distilling learned knowledge](#distilling-learned-knowledge).
+
+## Cloud sessions
+
+A hosted AI agent's cloud session — a container whose platform runs a setup
+script you supply, such as Claude Code on the web — gets the same
+AI-assistant configuration from `cloud.sh`. Paste this into the environment's
+setup-script field:
+
+```bash
+/bin/bash -c "$(curl -fsSL https://raw.githubusercontent.com/sakaal/setup/master/cloud.sh)"
+```
+
+To pin a release, put its tag in both places, as in
+[Pinning to a release tag](#pinning-to-a-release-tag):
+`SETUP_REF=<tag> /bin/bash -c "$(curl -fsSL https://raw.githubusercontent.com/sakaal/setup/<tag>/cloud.sh)"`.
+A different workspace repo goes after a `cloud` placeholder
+(`… cloud.sh)" cloud https://github.com/you/my-projects`), and `SETUP_DIR`
+and `WORKSPACE_DIR` work as they do for `setup.sh`.
+
+It clones setup into `~/setup` and your workspace repo over HTTPS into
+`~/<repo-name>/` (the platform authenticates the clone), links
+`~/.config/ai/` to its `ai/`, and wires the agent tools present in the
+container — MCP servers excepted, since those are configured for your own
+machines. It registers itself as the agent's session-start hook (for Claude
+Code, in `~/.claude/settings.json`), so every session start refreshes the
+workspace copy and re-checks the environment. It consumes no secrets, installs
+nothing, and never blocks a session: problems are reported, and it exits 0.
+
+**Environment variables** go in the environment's settings. At each session
+start `cloud.sh` names every expected one that is missing, and the agent tells
+you, so a request that needs one does not fail unexplained. It checks only
+whether each is set, never its value. Two sets are expected:
+
+- Your git identity. The platform rewrites `~/.gitconfig` with its own at
+  every start, and these variables take precedence over it:
+
+  ```
+  GIT_AUTHOR_NAME=Your Name
+  GIT_AUTHOR_EMAIL=you@example.com
+  GIT_COMMITTER_NAME=Your Name
+  GIT_COMMITTER_EMAIL=you@example.com
+  ```
+
+- The credentials your workspace repo declares in a `.env.example` at its root
+  (whitelisted in its `.gitignore`): one `NAME=` line each, with the comment
+  above it saying what the credential grants. The file is committed, so it
+  holds names only; `cloud.sh` reports a value there as an error, without
+  showing it.
+
+  ```
+  # GitHub API for the gh CLI (read-only token)
+  GH_TOKEN=
+  ```
+
+Keep one environment per identity (personal, each employer), each pointing at
+its own workspace repo. The design is in
+[docs/designs/cloud-sessions.md](docs/designs/cloud-sessions.md).
 
 ## Distilling learned knowledge
 
@@ -296,6 +357,7 @@ you reviewed. See [`docs/ai-pipeline-threat-model.md`](docs/ai-pipeline-threat-m
 
 ```
 setup.sh           Entry point — installs prerequisites, hands off to ansible
+cloud.sh           Cloud-session entry point — AI-assistant configuration only
 setup.yml          Ansible orchestrator — imports tasks/01..09 sequentially
 hosts.yml          Localhost-only inventory
 tasks/             Per-stage task files (01-discover ... 09-ai-config)
@@ -304,10 +366,10 @@ files/             Static files deployed verbatim by stages — includes the
                    ai-distill helper scripts
 keys/              Manually-triggered utility scripts (rotate-github-pat,
                    rotate-vault-password, adopt-ssh-keys)
-docs/              Design docs (ai-pipeline-threat-model.md)
+docs/              Design docs (ai-pipeline-threat-model.md, designs/)
 .claude-plugin/    Marketplace manifest — this repo is a Claude Code marketplace
 plugins/distill/   The distill agent plugin (command, skill, agents, hooks)
-tests/             Fixture tests for ai-harvest and ai-distill
+tests/             Fixture tests for the helper scripts and cloud.sh
 legacy/            Earlier (2018) version of this repo, kept for reference
 ```
 
