@@ -15,11 +15,11 @@ host, and where the operator's personal settings live.
 **CLOUD-SCOPE**: A cloud session receives the operator's AI-assistant
 configuration and nothing else: the workspace repo, the `~/.config/ai/` hub
 linked into its `ai/`, and user-scope wiring for every enrolled tool present in
-the container. Everything else the local host receives — SSH keys, the GitHub
-PAT, the vault password, packages, shell environment, the repos listed in
-`workspace.repos` — stays with the local host, because the platform already
-provides the container's tooling and GitHub access, and the session's own
-repos are the ones the platform attaches.
+the container, MCP servers excepted (CLOUD-MCP). Everything else the local host
+receives — SSH keys, the GitHub PAT, the vault password, packages, shell
+environment, the repos listed in `workspace.repos` — stays with the local host,
+because the platform already provides the container's tooling and GitHub
+access, and the session's own repos are the ones the platform attaches.
 
 The two targets are separate deliverables, as a workstation bootstrap and an
 unattended provisioning path are, because they differ in scope, audience and
@@ -90,11 +90,12 @@ The hook is registered by a distribute entry per tool in `agent-map.json`:
 class `session-start`, method `generate`, with an `ai-sync` emitter for the
 tool's settings format (for Claude Code, a `SessionStart` hook matching
 `startup` and `resume` in `~/.claude/settings.json`). The entry carries
-`targets: ["cloud"]`; an entry without `targets` applies to both targets, and
-the local host, where the workspace clone is the operator's working copy,
-receives no refresh hook. A platform that skips session-start hooks — Claude
-Code on the web documents this for sessions with more than one repository —
-still gets the build-time run.
+`targets: ["cloud"]`. The `targets` field names the targets an entry applies to
+— `local` for the local host, `cloud` for a cloud session — and an entry
+without it applies to both; the local host, where the workspace clone is the
+operator's working copy, receives no refresh hook. A platform that skips
+session-start hooks — Claude Code on the web documents this for sessions with
+more than one repository — still gets the build-time run.
 
 ## Shared wiring engine
 
@@ -117,6 +118,13 @@ Tool selection stays data-driven: an entry applies when its tool's `detect`
 directory exists, so a container is wired for whichever enrolled agent owns it.
 The container needs no Ansible, since `ai-sync` depends only on Python's
 standard library.
+
+**CLOUD-MCP**: The MCP entries (class `mcp`) carry `targets: ["local"]`, so a
+cloud session starts without the servers in `mcp.json`. Those servers are
+configured for the local host and may depend on binaries or credentials a
+container lacks, and a wired server that fails to start does so in every
+session. The hub still links `mcp.json`; no tool in a cloud session is wired to
+it.
 
 Workspace-scope entries do not apply in a cloud session: the platform checks
 the session's repos out outside `~/<workspace_dir>`, so no workspace-root
@@ -205,10 +213,10 @@ How the cloud target keeps each invariant in `AGENTS.md`:
 8. **Data-driven where open-ended** — tools and their wiring come from
    `agent-map.json`; no tool is named in `cloud.sh`.
 9. **Complete, lane-categorized coverage** — each tool's session-start hook
-   joins the distribute lane as a cloud-only entry; every other entry applies
-   to both targets. Harvest has nothing to collect in a cloud session, since
-   the container, with every store the tools kept in it, is discarded when the
-   session ends.
+   joins the distribute lane as a cloud-only entry, the MCP entries are
+   local-only, and every other entry applies to both targets. Harvest has
+   nothing to collect in a cloud session, since the container, with every store
+   the tools kept in it, is discarded when the session ends.
 
 The mission statement in `AGENTS.md` and the README's overview widen from "a
 fresh personal Mac or Linux machine" to include cloud sessions.
@@ -218,8 +226,9 @@ fresh personal Mac or Linux machine" to include cloud sessions.
 - `cloud.sh` — the cloud entry point, beside `setup.sh`.
 - `files/ai-sync` — hub build, the `link`/`import` methods, a session-start
   hook emitter, and target selection; a conflict yields a non-zero exit.
-- `files/agent-map.json` — the `session-start` class, the `targets` field in
-  the legend, and a hook entry per tool that offers one.
+- `files/agent-map.json` — the `session-start` class and the `targets` field in
+  the legend, a hook entry per tool that offers one, and `targets: ["local"]`
+  on the MCP entries.
 - `tasks/09-ai-config.yml`, `tasks/09-ai-sync.yml`, `tasks/09-ai-wire-one.yml`
   — hub and wiring replaced by a call to `ai-sync`; tool installs and deploys
   unchanged.
@@ -234,13 +243,6 @@ fresh personal Mac or Linux machine" to include cloud sessions.
   and its whitelist entry in `.gitignore`.
 
 ## Open questions
-
-**OPEN-MCP**: The `mcp.json` servers are configured for the local host and may
-depend on binaries or credentials a container lacks; wiring them into a cloud
-session would start servers that fail. Whether the cloud target skips the MCP
-entries, or the manifest marks servers per target with `targets`, is open. If
-the cloud target wires a server, the variables its `env` entries reference
-join the expected credentials.
 
 **OPEN-USER-SETTINGS**: CLOUD-REFRESH relies on the owning tool honouring
 user-level settings that the setup script writes inside the container before
