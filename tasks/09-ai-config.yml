@@ -1,75 +1,25 @@
 ---
 # 09-ai-config.yml — machine-local AI-assistant configuration, driven entirely
-# by files/agent-map.json. This stage and ~/bin/ai-sync both read that one
-# manifest and loop it generically — no tool is enumerated in code, so adding a
-# tool or class is a manifest edit alone.
+# by files/agent-map.json. ~/bin/ai-sync reads that one manifest and loops it
+# generically — no tool is enumerated in code, so adding a tool or class is a
+# manifest edit alone.
 #
-# Layers (all from the manifest):
-#   hub          — ~/.config/ai/ symlinks into the workspace repo's ai/ shared
-#                  sources (AGENTS.md, mcp.json, commands/, skills/, agents/).
-#   link/import  — each present tool's own path pointed at a hub source
-#                  (09-ai-sync.yml), non-destructively.
-#   generate/wrap — ai-sync renders hub sources into tool-specific formats.
+# ai-sync is the one wiring engine for both operating scenarios (cloud.sh runs
+# it in cloud sessions). From the manifest it:
+#   hub          — links ~/.config/ai/ into the workspace repo's ai/ shared
+#                  sources (AGENTS.md, mcp.json, commands/, skills/, agents/,
+#                  rules/), non-destructively.
+#   link/import  — points each present tool's own path at a hub source.
+#   generate/wrap — renders hub sources into tool-specific formats.
 #
-# Two taggable parts: ai-config (hub + manifest deploy, below) and ai-sync
-# (tool wiring + render, 09-ai-sync.yml).
-
-- name: Load the sync manifest
-  ansible.builtin.include_vars:
-    file: "{{ playbook_dir }}/files/agent-map.json"
-    name: ai_map
-  tags: [ai-config, ai-sync]
+# Two taggable parts: ai-config (manifest deploy, below) and ai-sync (engine
+# deploy and run, 09-ai-sync.yml).
 
 - name: Ensure ~/.config/ai exists
   ansible.builtin.file:
     path: "{{ home_dir }}/.config/ai"
     state: directory
     mode: "0755"
-  tags: [ai-config]
-
-# Hub symlinks → workspace sources. Laid only for sources the workspace repo
-# actually provides (so no dangling links); an existing non-symlink at a hub
-# path is never clobbered — it halts for reconciliation.
-- name: Stat workspace shared sources
-  ansible.builtin.stat:
-    path: "{{ home_dir }}/{{ workspace_dir }}/{{ ai_map.hub.workspace_subdir }}/{{ item }}"
-  loop: "{{ ai_map.hub.sources }}"
-  register: ws_sources
-  tags: [ai-config]
-
-- name: Stat hub targets (no symlink follow)
-  ansible.builtin.stat:
-    path: "{{ home_dir }}/.config/ai/{{ item }}"
-    follow: false
-  loop: "{{ ai_map.hub.sources }}"
-  register: hub_targets
-  tags: [ai-config]
-
-- name: Halt — a hub path holds real content (not ours)
-  ansible.builtin.fail:
-    msg: >-
-      Refusing to replace existing non-symlink path(s) under ~/.config/ai with
-      hub symlinks: {{ hub_conflicts | join(', ') }}. Move the content into the
-      workspace repo's ai/ and remove the local path, then re-run.
-  vars:
-    hub_conflicts: >-
-      {{ hub_targets.results
-         | selectattr('stat.exists')
-         | rejectattr('stat.islnk')
-         | map(attribute='item') | list }}
-  when: hub_conflicts | length > 0
-  tags: [ai-config]
-
-- name: Link hub → workspace sources (only those the repo provides)
-  ansible.builtin.file:
-    src: "{{ home_dir }}/{{ workspace_dir }}/{{ ai_map.hub.workspace_subdir }}/{{ item.item }}"
-    dest: "{{ home_dir }}/.config/ai/{{ item.item }}"
-    state: link
-    force: true
-  loop: "{{ ws_sources.results }}"
-  loop_control:
-    label: "{{ item.item }}"
-  when: item.stat.exists
   tags: [ai-config]
 
 - name: Deploy the sync manifest (for ~/bin/ai-sync to read at runtime)
