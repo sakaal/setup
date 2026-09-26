@@ -61,9 +61,10 @@ emit_session_start_json() {
 import json, sys
 lines = sys.stdin.read().rstrip("\n")
 context = ("The cloud-session setup (setup/cloud.sh) reported at session start:\n"
-           + lines + "\nTell the operator which environment variables are "
-           "missing: requests that need them fail until they are added in the "
-           "cloud environment settings, which new sessions pick up.")
+           + lines + "\nTell the operator about these at the start of the "
+           "session. A missing environment variable is added in the cloud "
+           "environment settings and reaches sessions started afterwards; until "
+           "then, requests that need it fail.")
 print(json.dumps({"hookSpecificOutput": {"hookEventName": "SessionStart",
                                          "additionalContext": context},
                   "systemMessage": lines}))
