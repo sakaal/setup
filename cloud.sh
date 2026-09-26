@@ -162,14 +162,18 @@ if [[ -z "$norm" || -z "$ws_name" || "$ws_name" == */* || "$ws_name" == .* ]]; t
 fi
 ws="$HOME/$ws_name"
 
+# ws_ok: only a clone of the workspace repo is wired from.
+ws_ok=false
 if [[ ! -e "$ws" ]]; then
   if net git clone --quiet "$https_url" "$ws" 2>/dev/null; then
     info "cloned $https_url into $ws"
+    ws_ok=true
   else
     err "could not clone $https_url; the shared AI instructions are not loaded"
   fi
 elif [[ -d "$ws/.git" && "$(normalize "$(git -C "$ws" remote get-url origin 2>/dev/null)")" == "$norm" ]]; then
   maybe_ff "$ws"
+  ws_ok=true
 else
   err "$ws exists but is not a clone of $https_url; left as is"
 fi
@@ -179,7 +183,7 @@ hook_cmd="$(printf '%q' "$SCRIPT_DIR/cloud.sh") --session-start"
 [[ -n "$WORKSPACE_ARG" ]] && hook_cmd+=" $(printf '%q' "$WORKSPACE_ARG")"
 [[ -n "${WORKSPACE_DIR:-}" ]] && hook_cmd="WORKSPACE_DIR=$(printf '%q' "$WORKSPACE_DIR") $hook_cmd"
 
-if [[ -d "$ws" ]]; then
+if $ws_ok; then
   if ! { mkdir -p "$HOME/.config/ai" \
          && cp "$SCRIPT_DIR/files/agent-map.json" "$HOME/.config/ai/agent-map.json"; }; then
     warn "could not deploy the sync manifest into ~/.config/ai"
@@ -213,7 +217,7 @@ for name in GIT_AUTHOR_NAME GIT_AUTHOR_EMAIL GIT_COMMITTER_NAME GIT_COMMITTER_EM
 done
 
 declared="$ws/.env.example"
-if [[ -f "$declared" ]]; then
+if $ws_ok && [[ -f "$declared" ]]; then
   comment=""
   lineno=0
   while IFS= read -r line || [[ -n "$line" ]]; do
