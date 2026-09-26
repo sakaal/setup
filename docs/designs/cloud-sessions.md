@@ -1,6 +1,6 @@
 # Cloud-session scenario
 
-Status: proposed.
+Status: accepted.
 
 Setup serves two operating scenarios. The **local host** is the operator's own
 Mac or Linux machine, bootstrapped by the `setup.sh` one-liner in the README. A
@@ -97,6 +97,13 @@ the workspace clone is the operator's working copy. A platform that skips
 session-start hooks still gets the build-time run; Claude Code on the web
 documents, as read on 2026-09-26, that it skips them in sessions with more than
 one repository.
+
+The owning tool honors user-level settings written inside the container. On
+Claude Code on the web, as observed on 2026-09-26, the platform launches Claude
+Code with its own settings file (`--settings`) and without restricting the
+setting sources, so `~/.claude/settings.json` is loaded; in that container, a
+`SessionStart` hook written there fired at startup, and the agent received its
+`additionalContext`.
 
 ## Shared wiring engine
 
@@ -244,13 +251,3 @@ fresh personal Mac or Linux machine" to include cloud sessions.
   new tests.
 - The workspace repo — a `.env.example` declaring its expected credentials,
   and its whitelist entry in `.gitignore`.
-
-## Open questions
-
-**OPEN-USER-SETTINGS**: CLOUD-REFRESH relies on the owning tool honoring
-user-level settings that the setup script writes inside the container before
-the tool starts. Claude Code's documentation, as read on 2026-09-26, states
-that the operator's machine-level settings do not carry over to cloud sessions,
-and does not cover a settings file created inside the container. The first
-implementation step verifies it; if the tool ignores such a file, the refresh
-has no hook, and the build-time run remains the only one.
