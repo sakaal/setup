@@ -441,6 +441,9 @@ def main(argv=None):
                         help="the sync manifest (default: ~/.config/ai/agent-map.json)")
     parser.add_argument("--dry-run", action="store_true",
                         help="report what would change without writing")
+    parser.add_argument("--report-tools", action="store_true",
+                        help="end with a 'tools:' line naming the tools whose "
+                             "entries are in place")
     args = parser.parse_args(argv)
     DRY_RUN = args.dry_run
 
@@ -460,7 +463,27 @@ def main(argv=None):
     # Only the distribute lane is machine-applied; harvest is cataloged
     # read-only by ~/bin/ai-harvest, and non-reusable is data no engine
     # touches.
+    def apply(entry):
+        sync = entry["sync"]
+        if sync in ("link", "import"):
+            wire_entry(entry)
+            return
+        emitter = EMITTERS.get(entry.get("format"))
+        if emitter is None:
+            sys.stderr.write("! skip %s: no emitter for format '%s'\n"
+                             % (entry["path"], entry.get("format")))
+            return
+        if entry.get("class") == "session-start":
+            if not args.session_start_command:
+                sys.stderr.write("! skip %s: no --session-start-command given\n"
+                                 % entry["path"])
+                return
+            emitter(entry, args.session_start_command)
+        else:
+            emitter(entry, os.path.join(CONFIG, entry["source"]))
+
     acted = False
+    wired = []  # tools with an entry changed or already in place, in manifest order
     for entry in manifest.get("entries", {}).get("distribute", []):
         # Match scope by its base (user vs workspace); a :path suffix
         # refines but does not change which engine owns the entry.
@@ -468,28 +491,15 @@ def main(argv=None):
             continue
         if args.scenario not in entry.get("scenarios", ("local", "cloud")):
             continue
-        sync = entry.get("sync")
-        if sync not in ("link", "import", "generate", "wrap"):
+        if entry.get("sync") not in ("link", "import", "generate", "wrap"):
             continue
         if not entry.get("path") or not present(entry["tool"]):
             continue
         acted = True
-        if sync in ("link", "import"):
-            wire_entry(entry)
-            continue
-        emitter = EMITTERS.get(entry.get("format"))
-        if emitter is None:
-            sys.stderr.write("! skip %s: no emitter for format '%s'\n"
-                             % (entry["path"], entry.get("format")))
-            continue
-        if entry.get("class") == "session-start":
-            if not args.session_start_command:
-                sys.stderr.write("! skip %s: no --session-start-command given\n"
-                                 % entry["path"])
-                continue
-            emitter(entry, args.session_start_command)
-        else:
-            emitter(entry, os.path.join(CONFIG, entry["source"]))
+        in_place = len(changed) + len(insync)
+        apply(entry)
+        if len(changed) + len(insync) > in_place and entry["tool"] not in wired:
+            wired.append(entry["tool"])
 
     verb = "would change" if DRY_RUN else "changed"
     for item in changed:
@@ -498,6 +508,8 @@ def main(argv=None):
         print("! conflict: %s" % item)
     if not changed and not conflicts and not wiring_conflicts:
         print("→ nothing to sync" if not acted else "→ all present tools already in sync")
+    if args.report_tools:
+        print("tools: %s" % (", ".join(wired) or "none"))
     if wiring_conflicts:
         sys.exit(2)
 
