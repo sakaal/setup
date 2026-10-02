@@ -107,6 +107,24 @@ setting sources, so `~/.claude/settings.json` is loaded; in that container, a
 `SessionStart` hook written there fired at startup, and the agent received its
 `additionalContext`.
 
+**CLOUD-SUMMARY**: Every run ends with one summary line of what it put in place
+beyond a default session: the setup clone's tag or branch and commit, the
+workspace commit or that the workspace is not loaded, the tools wired, and the
+expected environment variables that are set — commit ids and names only, never
+a value. A field that cannot be determined is left out:
+
+```
+loaded: setup vX.Y.Z@1a2b3c4; workspace 3882397; tools: claude-code; env: GIT_AUTHOR_NAME, GIT_AUTHOR_EMAIL, GIT_COMMITTER_NAME, GIT_COMMITTER_EMAIL
+```
+
+A build-time run prints it last, as `→ loaded: …`, in the setup log. A
+session-start run returns it on every start as the user-facing message,
+followed by any warnings and errors, so a clean start is told apart from a hook
+that did not run. The agent's context receives the warnings and errors alone,
+so a clean start adds nothing to it. The tools come from `ai-sync
+--report-tools`, which names each tool with an entry changed or already in
+place.
+
 ## Shared wiring engine
 
 **CLOUD-WIRING**: The hub build and every distribute-lane wiring method run in
@@ -202,11 +220,12 @@ each identity context declares its own expected set.
 The report reaches the operator by two paths. The build-time run writes it to
 the platform's setup log. The session-start run returns it to the owning tool
 as context for the agent — the documented channel (for Claude Code, the hook's
-`additionalContext`) — and as a user-facing message where the client displays
-one. With the missing names in context, the agent tells the operator at the
-start of the session and names the missing variable when a request depends on
-it. A variable added in the environment's settings reaches sessions started
-afterwards, whose check then passes.
+`additionalContext`) — and, after the summary line (CLOUD-SUMMARY), as a
+user-facing message where the client displays one. With the missing names in
+context, the agent tells the operator at the start of the session and names the
+missing variable when a request depends on it. A variable added in the
+environment's settings reaches sessions started afterwards, whose check then
+passes.
 
 **CLOUD-WORKSPACE-REPO**: The workspace repo defaults to the same repo as on
 the local host (`workspace_repo` in `setup.yml`), overridden by the one-liner's

@@ -125,6 +125,26 @@ import json,sys
 d=json.load(open(sys.argv[1])); assert d[\"model\"]==\"x\" and d[\"hooks\"][\"SessionStart\"]
 " "$home/.claude/settings.json"' "$out"
 
+# ── Reported tools ───────────────────────────────────────────────────────────
+reset
+out=$(sync --scenario cloud --session-start-command "$hook" --report-tools)
+check "report-tools: cloud names each wired tool, last" \
+  '[ "$(printf "%s\n" "$out" | tail -n 1)" = "tools: claude-code, gemini-cli" ]' "$out"
+
+reset
+out=$(sync --scenario local --report-tools)
+check "report-tools: local names each wired tool in manifest order" \
+  '[ "$(printf "%s\n" "$out" | tail -n 1)" = "tools: claude-code, gemini-cli" ]' "$out"
+
+reset
+echo "my notes" > "$home/.claude/CLAUDE.md"
+out=$(sync --scenario local --report-tools)
+check "report-tools: a tool with only a conflict is not named" \
+  '[ "$(printf "%s\n" "$out" | tail -n 1)" = "tools: gemini-cli" ]' "$out"
+
+out=$(sync --scenario local)
+check "without --report-tools there is no tools line" '! printf "%s\n" "$out" | grep -q "^tools: "' "$out"
+
 # ── Dry run ──────────────────────────────────────────────────────────────────
 reset
 out=$(sync --dry-run); rc=$?

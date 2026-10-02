@@ -11,8 +11,9 @@
 #   SETUP_REF=vX.Y.Z /bin/bash -c "$(curl -fsSL https://raw.githubusercontent.com/sakaal/setup/vX.Y.Z/cloud.sh)" [cloud <workspace-repo>]
 # It clones setup into $SETUP_DIR (default ~/setup) and re-runs from there.
 # The wiring registers "<clone>/cloud.sh --session-start" as the owning tool's
-# session-start hook; that run refreshes the same state and returns its report
-# to the tool as JSON, for the agent's context.
+# session-start hook; that run refreshes the same state and returns, as JSON, a
+# "loaded: …" summary line for the operator and its warnings and errors for the
+# agent's context.
 #
 # Environment: SETUP_DIR, SETUP_REF (default master), WORKSPACE_DIR (the
 # workspace repo's directory under $HOME; default its basename).
@@ -34,6 +35,12 @@ $SESSION_START && ARGS+=(--session-start)
 
 # ── Reporting: every line is kept for the session-start JSON ────────────────
 LINES=()
+# What the summary line reports, set as each step completes.
+ws_ok=false
+ws=""
+TOOLS=""           # ai-sync's "tools:" list; empty until it has run
+ENV_SET=()         # expected variables that are set, by name
+ENV_CHECKED=false
 report() {
   LINES+=("$1")
   $SESSION_START || printf '%s\n' "$1"
@@ -43,32 +50,69 @@ warn() { report "! $*"; }
 err()  { report "✗ $*"; }
 
 finish() {
+  local summary
+  summary="$(summary_line)"
   if $SESSION_START; then
-    emit_session_start_json
+    emit_session_start_json "$summary"
+  elif [[ -n "$summary" ]]; then
+    printf '→ %s\n' "$summary"
   fi
   exit 0
 }
 
-# emit_session_start_json — the hook's output: the warnings and errors, as
-# context for the agent and as a message for the operator; nothing when clean.
+# summary_line — "loaded: …", what this run put in place beyond a default
+# session: commit ids, tool names and variable names, never a value. A field it
+# cannot determine is left out; with no field known it prints nothing.
+summary_line() {
+  local fields=() sha ref names f out
+  if [[ -n "${SCRIPT_DIR:-}" ]] && sha="$(git -C "$SCRIPT_DIR" rev-parse --short HEAD 2>/dev/null)"; then
+    ref="$(git -C "$SCRIPT_DIR" describe --tags --exact-match HEAD 2>/dev/null \
+           || git -C "$SCRIPT_DIR" symbolic-ref --short -q HEAD 2>/dev/null)"
+    fields+=("setup ${ref:+$ref@}$sha")
+  fi
+  if ! $ws_ok; then
+    fields+=("workspace not loaded")
+  elif sha="$(git -C "$ws" rev-parse --short HEAD 2>/dev/null)"; then
+    fields+=("workspace $sha")
+  fi
+  [[ -n "$TOOLS" ]] && fields+=("tools: $TOOLS")
+  if $ENV_CHECKED; then
+    names="none"
+    ((${#ENV_SET[@]})) && names="$(printf '%s, ' "${ENV_SET[@]}")" && names="${names%, }"
+    fields+=("env: $names")
+  fi
+  ((${#fields[@]})) || return 0
+  out="loaded: ${fields[0]}"
+  for f in "${fields[@]:1}"; do out+="; $f"; done
+  printf '%s' "$out"
+}
+
+# emit_session_start_json SUMMARY — the hook's output, on every start: the
+# summary line, then any warnings and errors, as a message for the operator;
+# the warnings and errors alone also go to the agent's context.
 emit_session_start_json() {
   local notable=() line
   for line in "${LINES[@]}"; do
     [[ "$line" == "!"* || "$line" == "✗"* ]] && notable+=("$line")
   done
-  ((${#notable[@]})) || return 0
   printf '%s\n' "${notable[@]}" | python3 -c '
 import json, sys
-lines = sys.stdin.read().rstrip("\n")
-context = ("The cloud-session setup (setup/cloud.sh) reported at session start:\n"
-           + lines + "\nTell the operator about these at the start of the "
-           "session. A missing environment variable is added in the cloud "
-           "environment settings and reaches sessions started afterwards; until "
-           "then, requests that need it fail.")
-print(json.dumps({"hookSpecificOutput": {"hookEventName": "SessionStart",
-                                         "additionalContext": context},
-                  "systemMessage": lines}))
-' 2>/dev/null || true
+summary = sys.argv[1]
+lines = sys.stdin.read().strip("\n")
+out = {}
+message = "\n".join(part for part in (summary, lines) if part)
+if message:
+    out["systemMessage"] = message
+if lines:
+    context = ("The cloud-session setup (setup/cloud.sh) reported at session start:\n"
+               + lines + "\nTell the operator about these at the start of the "
+               "session. A missing environment variable is added in the cloud "
+               "environment settings and reaches sessions started afterwards; until "
+               "then, requests that need it fail.")
+    out["hookSpecificOutput"] = {"hookEventName": "SessionStart",
+                                 "additionalContext": context}
+print(json.dumps(out))
+' "$1" 2>/dev/null || true
 }
 
 # net CMD... — a network step, bounded so a slow host delays the session only
@@ -175,7 +219,6 @@ fi
 ws="$HOME/$ws_name"
 
 # ws_ok: only a clone of the workspace repo is wired from.
-ws_ok=false
 if [[ ! -e "$ws" ]]; then
   out="$(net git clone --quiet "$https_url" "$ws" 2>&1)"
   status=$?
@@ -200,7 +243,7 @@ hook_cmd="$(printf '%q' "$SCRIPT_DIR/cloud.sh") --session-start"
 # Runs even without the workspace, so the session-start hook is registered and
 # the next session start retries what failed here.
 sync_args=(--scenario cloud --manifest "$SCRIPT_DIR/files/agent-map.json"
-           --session-start-command "$hook_cmd")
+           --session-start-command "$hook_cmd" --report-tools)
 $ws_ok && sync_args+=(--workspace "$ws")
 if ! { mkdir -p "$HOME/.config/ai" \
        && cp "$SCRIPT_DIR/files/agent-map.json" "$HOME/.config/ai/agent-map.json"; }; then
@@ -211,6 +254,7 @@ sync_rc=$?
 while IFS= read -r line; do
   [[ -n "$line" ]] || continue
   case "$line" in
+    "tools: "*) TOOLS="${line#tools: }" ;;
     →*|!*|✗*) report "$line" ;;
     *) report "! $line" ;;
   esac
@@ -265,8 +309,11 @@ for i in "${!EXPECTED[@]}"; do
   if [[ -z "${!name:-}" ]]; then
     warn "missing environment variable $name — ${PURPOSE[$i]}"
     missing=$((missing + 1))
+  else
+    ENV_SET+=("$name")
   fi
 done
+ENV_CHECKED=true
 ((missing)) || $SESSION_START || info "all ${#EXPECTED[@]} expected environment variables are set"
 
 finish

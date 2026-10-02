@@ -33,6 +33,7 @@ check() { if eval "$2"; then ok "$1"; else bad "$1" "${3:-$2}"; fi; }
 home="$tmp/home"
 repo="https://example.invalid/me/ws"
 secret="s3cr3t-value-never-shown"
+present="pr3sent-value-never-shown"
 identity=(GIT_AUTHOR_NAME=a GIT_AUTHOR_EMAIL=a@example.invalid
           GIT_COMMITTER_NAME=a GIT_COMMITTER_EMAIL=a@example.invalid)
 
@@ -41,6 +42,8 @@ reset() {
   mkdir -p "$home/.claude" "$home/ws/ai"
   git -C "$home/ws" init --quiet -b main
   git -C "$home/ws" remote add origin "$repo.git"
+  git -C "$home/ws" -c user.name=t -c user.email=t@example.invalid \
+    commit --quiet --allow-empty -m init
   echo "# shared" > "$home/ws/ai/AGENTS.md"
   cat > "$home/ws/.env.example" <<EOF
 # demo service API (read-only token)
@@ -64,11 +67,12 @@ cloud() {
 
 # ── Build run ────────────────────────────────────────────────────────────────
 reset
-out=$(cloud "${identity[@]}" PRESENT_TOKEN=x -- "$repo"); rc=$?
+out=$(cloud "${identity[@]}" PRESENT_TOKEN="$present" -- "$repo"); rc=$?
 check "exits 0" '[ $rc -eq 0 ]' "$out"
 check "names a missing declared variable with its purpose" \
   'printf "%s" "$out" | grep -q "! missing environment variable DEMO_TOKEN — demo service API (read-only token)"' "$out"
-check "a set variable is not reported" '! printf "%s" "$out" | grep -q "PRESENT_TOKEN"' "$out"
+check "a set variable is not reported missing" \
+  '! printf "%s" "$out" | grep -q "missing environment variable PRESENT_TOKEN"' "$out"
 check "a quoted empty value counts as a declaration" \
   'printf "%s" "$out" | grep -q "missing environment variable QUOTED — declared in .env.example"' "$out"
 check "a committed value is an error" \
@@ -76,7 +80,14 @@ check "a committed value is an error" \
 check "the committed value is never shown" '! printf "%s" "$out" | grep -q "$secret"' "$out"
 check "an invalid line is reported and skipped" \
   'printf "%s" "$out" | grep -q "is not a NAME= declaration; skipped"' "$out"
-check "the identity variables are not reported when set" '! printf "%s" "$out" | grep -q GIT_' "$out"
+check "the identity variables are not reported missing when set" \
+  '! printf "%s" "$out" | grep -q "missing environment variable GIT_"' "$out"
+check "the summary is the one last line, naming what loaded" \
+  '[ "$(printf "%s\n" "$out" | grep -c "^→ loaded: ")" -eq 1 ] \
+   && printf "%s\n" "$out" | tail -n 1 | grep -q "^→ loaded: setup [^;]*; workspace [0-9a-f]*; tools: claude-code; env: GIT_AUTHOR_NAME, GIT_AUTHOR_EMAIL, GIT_COMMITTER_NAME, GIT_COMMITTER_EMAIL, PRESENT_TOKEN$"' "$out"
+check "no report line repeats, and ai-sync's tools line stays internal" \
+  '[ -z "$(printf "%s\n" "$out" | sort | uniq -d)" ] && ! printf "%s\n" "$out" | grep -q "^tools: "' "$out"
+check "no variable value appears in the output" '! printf "%s" "$out" | grep -q "$present"' "$out"
 check "the workspace is wired (CLAUDE.md stub)" \
   '[ "$(cat "$home/.claude/CLAUDE.md" 2>/dev/null)" = "@$home/.config/ai/AGENTS.md" ]' "$out"
 check "the refresh hook re-runs this clone with the workspace repo" \
@@ -93,7 +104,7 @@ check "all set: says so" 'printf "%s" "$out" | grep -q "all 4 expected environme
 
 # ── Session start ────────────────────────────────────────────────────────────
 reset
-out=$(cloud "${identity[@]}" PRESENT_TOKEN=x -- --session-start "$repo"); rc=$?
+out=$(cloud "${identity[@]}" PRESENT_TOKEN="$present" -- --session-start "$repo"); rc=$?
 check "session start exits 0 with JSON only" \
   '[ $rc -eq 0 ] && printf "%s" "$out" | python3 -c "import json,sys; json.load(sys.stdin)"' "$out"
 check "session start gives the agent the missing names" \
@@ -105,10 +116,26 @@ assert d[\"hookSpecificOutput\"][\"hookEventName\"]==\"SessionStart\"
 assert \"DEMO_TOKEN\" in c and \"PRESENT_TOKEN\" not in c and d[\"systemMessage\"]
 "' "$out"
 check "session start never shows the committed value" '! printf "%s" "$out" | grep -q "$secret"' "$out"
+check "session start never shows a variable value" '! printf "%s" "$out" | grep -q "$present"' "$out"
+check "warning start: the operator sees the summary line, then the warnings" \
+  'printf "%s" "$out" | python3 -c "
+import json,sys
+m=json.load(sys.stdin)[\"systemMessage\"].split(\"\\n\")
+assert m[0].startswith(\"loaded: setup \") and \"PRESENT_TOKEN\" in m[0] and \"DEMO_TOKEN\" not in m[0]
+assert any(l.startswith(\"! missing environment variable DEMO_TOKEN\") for l in m[1:])
+"' "$out"
 
 rm "$home/ws/.env.example"
 out=$(cloud "${identity[@]}" -- --session-start "$repo")
-check "session start prints nothing when all is well" '[ -z "$out" ]' "$out"
+check "clean start: only a systemMessage, the one summary line" \
+  'printf "%s" "$out" | python3 -c "
+import json,sys
+d=json.load(sys.stdin)
+assert list(d)==[\"systemMessage\"], d
+m=d[\"systemMessage\"]
+assert \"\\n\" not in m and m.startswith(\"loaded: setup \") and \"; workspace \" in m
+assert m.endswith(\"; tools: claude-code; env: GIT_AUTHOR_NAME, GIT_AUTHOR_EMAIL, GIT_COMMITTER_NAME, GIT_COMMITTER_EMAIL\"), m
+"' "$out"
 
 # ── A failed clone ───────────────────────────────────────────────────────────
 # A git double fails every clone as an unauthorized fetch does, with
@@ -141,7 +168,9 @@ out=$(cloud "${identity[@]}" PATH="$tmp/bin:$PATH" -- --session-start "$repo")
 check "failed clone: session start gives the agent the error" \
   'printf "%s" "$out" | python3 -c "
 import json,sys
-assert \"403\" in json.load(sys.stdin)[\"hookSpecificOutput\"][\"additionalContext\"]
+d=json.load(sys.stdin)
+assert \"403\" in d[\"hookSpecificOutput\"][\"additionalContext\"]
+assert \"; workspace not loaded; \" in d[\"systemMessage\"].split(\"\\n\")[0]
 "' "$out"
 
 # ── Refusals ─────────────────────────────────────────────────────────────────
