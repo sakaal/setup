@@ -190,16 +190,20 @@ A different workspace repo goes after a `cloud` placeholder
 and `WORKSPACE_DIR` work as they do for `setup.sh`.
 
 It clones setup into `~/setup` and your workspace repo over HTTPS into
-`~/<repo-name>/` (the platform authenticates the clone), links `~/.config/ai/`
-to its `ai/`, and wires the agent tools present in the container — MCP servers
-excepted, since those are configured for your own machines. It registers itself
-as the agent's session-start hook (for Claude Code, in
-`~/.claude/settings.json`), so every session start refreshes the workspace copy
-and re-checks the environment. At each session start the agent receives one
-`loaded: …` line — the setup and workspace commits and where they are, the
-tools wired and the environment variables set, by name — so it can tell you
-what was loaded; ask it. It consumes no secrets, installs nothing, and never
-blocks a session: problems are reported, and it exits 0.
+`~/<repo-name>/` (the platform authenticates the clone for repos attached to
+the session), links `~/.config/ai/` to its `ai/`, and wires the agent tools
+present in the container — MCP servers excepted, since those are configured for
+your own machines. It registers itself as the agent's session-start hook (for
+Claude Code, in `~/.claude/settings.json`), so every session start refreshes
+the workspace copy and re-checks the environment. At each session start the
+agent receives one `loaded: …` line — the setup and workspace commits and where
+they are, the tools wired and the environment variables set, by name — so it
+can tell you what was loaded; ask it. It consumes no secrets, installs nothing,
+and never blocks a session: problems are reported, and it exits 0.
+
+Attach your workspace repo to every session, next to the repo you work in: a
+private repo not attached to the session cannot be cloned, and the session then
+starts without your shared instructions (`~/<repo-name> not loaded`).
 
 **Environment variables** go in the environment's settings. At each session
 start `cloud.sh` names every expected one that is missing, and the agent tells

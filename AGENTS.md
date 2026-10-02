@@ -130,20 +130,21 @@ Tag pinning and GPG-signed tags then work via standard git.
 
 ## Cloud sessions
 
-The second operating scenario, specified in `docs/designs/cloud-sessions.md`:
-a hosted AI agent's container whose platform runs an operator-supplied setup
-script. Its field holds a pinned one-liner that fetches `cloud.sh`, which clones
-setup into `$SETUP_DIR` and re-runs from there — never from the working
+The second operating scenario, specified in `docs/designs/cloud-sessions.md`: a
+hosted AI agent's container whose platform runs an operator-supplied setup
+script. Its field holds a pinned one-liner that fetches `cloud.sh`, which
+clones setup into `$SETUP_DIR` and re-runs from there — never from the working
 directory, which in a cloud session may be the agent's own checkout of this
 repo. `cloud.sh` delivers only the AI-assistant configuration: it clones the
-workspace repo over HTTPS (the platform authenticates it), runs `ai-sync
---scenario cloud`, and names every expected environment variable the
-environment lacks — the four `GIT_AUTHOR_*`/`GIT_COMMITTER_*` identity
-variables plus those the workspace repo names in `.env.example` — reading
-presence only. It consumes no secrets, installs nothing, and always exits 0.
-The wiring registers `cloud.sh --session-start` as the owning tool's
-session-start hook, which repeats the run and returns its warnings to the agent
-as JSON context.
+workspace repo over HTTPS (the platform authenticates it when the repo is
+attached to the session), runs `ai-sync --scenario cloud`, and names every
+expected environment variable the environment lacks — the four
+`GIT_AUTHOR_*`/`GIT_COMMITTER_*` identity variables plus those the workspace
+repo names in `.env.example` — reading presence only. It consumes no secrets,
+installs nothing, and always exits 0. The wiring registers `cloud.sh
+--session-start` as the owning tool's session-start hook, which repeats the run
+and returns its `loaded: …` summary line and any warnings to the agent as JSON
+context.
 
 ## Location independence (realizes 4)
 
