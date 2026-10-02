@@ -12,7 +12,7 @@
 # It clones setup into $SETUP_DIR (default ~/setup) and re-runs from there.
 # The wiring registers "<clone>/cloud.sh --session-start" as the owning tool's
 # session-start hook; that run refreshes the same state and returns, as JSON, a
-# "loaded: …" summary line for the operator and its warnings and errors for the
+# "loaded: …" summary line and its warnings and errors, for the operator and the
 # agent's context.
 #
 # Environment: SETUP_DIR, SETUP_REF (default master), WORKSPACE_DIR (the
@@ -88,8 +88,9 @@ summary_line() {
 }
 
 # emit_session_start_json SUMMARY — the hook's output, on every start: the
-# summary line, then any warnings and errors, as a message for the operator;
-# the warnings and errors alone also go to the agent's context.
+# summary line, then any warnings and errors, as a message for the operator and
+# as the agent's context. A clean start gives the agent the summary line alone;
+# the instruction to tell the operator comes only with warnings or errors.
 emit_session_start_json() {
   local notable=() line
   for line in "${LINES[@]}"; do
@@ -103,14 +104,20 @@ out = {}
 message = "\n".join(part for part in (summary, lines) if part)
 if message:
     out["systemMessage"] = message
+head = "Cloud-session setup (setup/cloud.sh) at session start"
+context = []
+if summary:
+    context.append(head + ": " + summary)
 if lines:
-    context = ("The cloud-session setup (setup/cloud.sh) reported at session start:\n"
-               + lines + "\nTell the operator about these at the start of the "
-               "session. A missing environment variable is added in the cloud "
-               "environment settings and reaches sessions started afterwards; until "
-               "then, requests that need it fail.")
+    context.append((head + ", warnings and errors:" if not summary
+                    else "Its warnings and errors:") + "\n" + lines
+                   + "\nTell the operator about these at the start of the "
+                   "session. A missing environment variable is added in the cloud "
+                   "environment settings and reaches sessions started afterwards; "
+                   "until then, requests that need it fail.")
+if context:
     out["hookSpecificOutput"] = {"hookEventName": "SessionStart",
-                                 "additionalContext": context}
+                                 "additionalContext": "\n".join(context)}
 print(json.dumps(out))
 ' "$1" 2>/dev/null || true
 }
