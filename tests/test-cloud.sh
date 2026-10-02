@@ -14,9 +14,15 @@
 
 set -uo pipefail
 
-root=$(cd "$(dirname "$0")/.." && pwd)
+src=$(cd "$(dirname "$0")/.." && pwd)
 tmp=$(mktemp -d)
 trap 'rm -rf "$tmp"' EXIT
+
+# cloud.sh runs in place from a copy with no upstream, so its session-start
+# runs neither fetch nor fast-forward the working copy under test.
+cp -a "$src" "$tmp/setup"
+git -C "$tmp/setup" branch --unset-upstream 2>/dev/null
+root="$tmp/setup"
 
 pass=0
 fail=0
@@ -103,6 +109,40 @@ check "session start never shows the committed value" '! printf "%s" "$out" | gr
 rm "$home/ws/.env.example"
 out=$(cloud "${identity[@]}" -- --session-start "$repo")
 check "session start prints nothing when all is well" '[ -z "$out" ]' "$out"
+
+# ── A failed clone ───────────────────────────────────────────────────────────
+# A git double fails every clone as an unauthorized fetch does, with
+# credentials in the URL; every other git command runs the real git.
+mkdir -p "$tmp/bin"
+cat > "$tmp/bin/git" <<EOF
+#!/usr/bin/env bash
+for a in "\$@"; do
+  if [ "\$a" = clone ]; then
+    echo "fatal: unable to access 'https://me:t0ken@example.invalid/me/ws.git/': The requested URL returned error: 403" >&2
+    echo "second line" >&2
+    exit 128
+  fi
+done
+exec $(command -v git) "\$@"
+EOF
+chmod +x "$tmp/bin/git"
+
+reset
+rm -rf "$home/ws"
+out=$(cloud "${identity[@]}" PATH="$tmp/bin:$PATH" -- "$repo"); rc=$?
+check "failed clone: exits 0 with the first line of git's error" \
+  '[ $rc -eq 0 ] && printf "%s" "$out" | grep -q "✗ could not clone $repo.git: fatal: unable to access .https://example.invalid/me/ws.git/.: The requested URL returned error: 403"' "$out"
+check "failed clone: credentials in a URL are not shown" '! printf "%s" "$out" | grep -q t0ken' "$out"
+check "failed clone: later error lines are left out" '! printf "%s" "$out" | grep -q "second line"' "$out"
+check "failed clone: the hook is registered, so session start retries" \
+  'grep -q "\"$root/cloud.sh --session-start $repo\"" "$home/.claude/settings.json"' \
+  "$(cat "$home/.claude/settings.json" 2>&1)"
+out=$(cloud "${identity[@]}" PATH="$tmp/bin:$PATH" -- --session-start "$repo")
+check "failed clone: session start gives the agent the error" \
+  'printf "%s" "$out" | python3 -c "
+import json,sys
+assert \"403\" in json.load(sys.stdin)[\"hookSpecificOutput\"][\"additionalContext\"]
+"' "$out"
 
 # ── Refusals ─────────────────────────────────────────────────────────────────
 reset
