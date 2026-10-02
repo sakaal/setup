@@ -108,13 +108,16 @@ setting sources, so `~/.claude/settings.json` is loaded; in that container, a
 `additionalContext`.
 
 **CLOUD-SUMMARY**: Every run ends with one summary line of what it put in place
-beyond a default session: the setup clone's tag or branch and commit, the
-workspace commit or that the workspace is not loaded, the tools wired, and the
-expected environment variables that are set — commit ids and names only, never
-a value. A field that cannot be determined is left out:
+beyond a default session: the setup clone's tag or branch, commit and absolute
+path; the workspace clone's commit and absolute path, or that the workspace is
+not loaded and where it was expected; the tools wired; and the expected
+environment variables that are set. It carries commit ids, paths and names
+only, never a value, so an agent finds the clones without guessing from its
+working directory, which is the platform's own checkout. A field that cannot be
+determined is left out:
 
 ```
-loaded: setup vX.Y.Z@1a2b3c4; workspace 3882397; tools: claude-code; env: GIT_AUTHOR_NAME, GIT_AUTHOR_EMAIL, GIT_COMMITTER_NAME, GIT_COMMITTER_EMAIL
+loaded: setup vX.Y.Z@1a2b3c4 in /root/setup; workspace 3882397 in /root/workspace; tools: claude-code; env: GIT_AUTHOR_NAME, GIT_AUTHOR_EMAIL, GIT_COMMITTER_NAME, GIT_COMMITTER_EMAIL
 ```
 
 A build-time run prints it last, as `→ loaded: …`, in the setup log. A
