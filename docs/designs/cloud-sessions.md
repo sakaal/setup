@@ -63,9 +63,12 @@ changes only to move to a newer tag.
 2. Clone the workspace repo into `~/<workspace_dir>`, or fast-forward an
    existing clone whose origin matches, comparing origins with the same
    `host/owner/repo` normalization as stage 06. The clone uses HTTPS, which the
-   platform's proxy authenticates; an SSH-form repo argument or default is
-   translated to its HTTPS equivalent. `WORKSPACE_DIR` overrides the directory
-   name as on the local host.
+   platform's proxy authenticates for repos attached to the session, so the
+   operator attaches the workspace repo to each session: a private repo outside
+   that scope cannot be cloned (as observed on 2026-10-02, and as the platform
+   documents for its GitHub API requests); an SSH-form repo argument or default
+   is translated to its HTTPS equivalent. `WORKSPACE_DIR` overrides the
+   directory name as on the local host.
 3. Deploy `agent-map.json` into the hub and run the shared wiring engine
    (CLOUD-WIRING) from the setup clone; the wiring includes the session-start
    hook (CLOUD-REFRESH). It runs even when the workspace clone failed, without
