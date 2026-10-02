@@ -118,12 +118,15 @@ loaded: setup vX.Y.Z@1a2b3c4; workspace 3882397; tools: claude-code; env: GIT_AU
 ```
 
 A build-time run prints it last, as `→ loaded: …`, in the setup log. A
-session-start run returns it on every start as the user-facing message,
-followed by any warnings and errors, so a clean start is told apart from a hook
-that did not run. The agent's context receives the warnings and errors alone,
-so a clean start adds nothing to it. The tools come from `ai-sync
---report-tools`, which names each tool with an entry changed or already in
-place.
+session-start run returns it on every start, followed by any warnings and
+errors, both as the user-facing message and as the agent's context, so a clean
+start is told apart from a hook that did not run. The agent's context carries
+it because a client need not display the message: as observed on 2026-10-02,
+the Claude app shows nothing of it. On a clean start the context is the summary
+line alone, with no instruction, so the agent can say what was loaded when
+asked; the instruction to tell the operator comes only with warnings or errors.
+The tools come from `ai-sync --report-tools`, which names each tool with an
+entry changed or already in place.
 
 ## Shared wiring engine
 

@@ -107,13 +107,16 @@ reset
 out=$(cloud "${identity[@]}" PRESENT_TOKEN="$present" -- --session-start "$repo"); rc=$?
 check "session start exits 0 with JSON only" \
   '[ $rc -eq 0 ] && printf "%s" "$out" | python3 -c "import json,sys; json.load(sys.stdin)"' "$out"
-check "session start gives the agent the missing names" \
+check "session start gives the agent the summary, the missing names and the instruction" \
   'printf "%s" "$out" | python3 -c "
 import json,sys
 d=json.load(sys.stdin)
-c=d[\"hookSpecificOutput\"][\"additionalContext\"]
+c=d[\"hookSpecificOutput\"][\"additionalContext\"].split(\"\\n\")
 assert d[\"hookSpecificOutput\"][\"hookEventName\"]==\"SessionStart\"
-assert \"DEMO_TOKEN\" in c and \"PRESENT_TOKEN\" not in c and d[\"systemMessage\"]
+assert c[0].startswith(\"Cloud-session setup (setup/cloud.sh) at session start: loaded: setup \")
+assert any(l.startswith(\"! missing environment variable DEMO_TOKEN\") for l in c)
+assert not any(l.startswith(\"! missing environment variable PRESENT_TOKEN\") for l in c)
+assert c[-1].startswith(\"Tell the operator about these\")
 "' "$out"
 check "session start never shows the committed value" '! printf "%s" "$out" | grep -q "$secret"' "$out"
 check "session start never shows a variable value" '! printf "%s" "$out" | grep -q "$present"' "$out"
@@ -127,14 +130,16 @@ assert any(l.startswith(\"! missing environment variable DEMO_TOKEN\") for l in 
 
 rm "$home/ws/.env.example"
 out=$(cloud "${identity[@]}" -- --session-start "$repo")
-check "clean start: only a systemMessage, the one summary line" \
+check "clean start: the one summary line, for the operator and the agent" \
   'printf "%s" "$out" | python3 -c "
 import json,sys
 d=json.load(sys.stdin)
-assert list(d)==[\"systemMessage\"], d
+assert sorted(d)==[\"hookSpecificOutput\", \"systemMessage\"], d
 m=d[\"systemMessage\"]
 assert \"\\n\" not in m and m.startswith(\"loaded: setup \") and \"; workspace \" in m
 assert m.endswith(\"; tools: claude-code; env: GIT_AUTHOR_NAME, GIT_AUTHOR_EMAIL, GIT_COMMITTER_NAME, GIT_COMMITTER_EMAIL\"), m
+c=d[\"hookSpecificOutput\"][\"additionalContext\"]
+assert c==\"Cloud-session setup (setup/cloud.sh) at session start: \"+m, c
 "' "$out"
 
 # ── A failed clone ───────────────────────────────────────────────────────────
