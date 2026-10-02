@@ -61,20 +61,20 @@ finish() {
 }
 
 # summary_line — "loaded: …", what this run put in place beyond a default
-# session: commit ids and absolute paths, tool names and variable names, never a
-# value. A field it cannot determine is left out; with no field known it prints
-# nothing.
+# session: each clone's absolute path with its commit, tool names and variable
+# names, never a value. A field it cannot determine is left out; with no field
+# known it prints nothing.
 summary_line() {
   local fields=() sha ref names f out
   if [[ -n "${SCRIPT_DIR:-}" ]] && sha="$(git -C "$SCRIPT_DIR" rev-parse --short HEAD 2>/dev/null)"; then
     ref="$(git -C "$SCRIPT_DIR" describe --tags --exact-match HEAD 2>/dev/null \
            || git -C "$SCRIPT_DIR" symbolic-ref --short -q HEAD 2>/dev/null)"
-    fields+=("setup ${ref:+$ref@}$sha in $SCRIPT_DIR")
+    fields+=("$SCRIPT_DIR ${ref:+$ref@}$sha")
   fi
   if ! $ws_ok; then
-    fields+=("workspace not loaded${ws:+ ($ws)}")
+    fields+=("${ws:-workspace} not loaded")
   elif sha="$(git -C "$ws" rev-parse --short HEAD 2>/dev/null)"; then
-    fields+=("workspace $sha in $ws")
+    fields+=("$ws $sha")
   fi
   [[ -n "$TOOLS" ]] && fields+=("tools: $TOOLS")
   if $ENV_CHECKED; then
