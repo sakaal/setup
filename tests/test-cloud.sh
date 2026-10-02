@@ -84,7 +84,7 @@ check "the identity variables are not reported missing when set" \
   '! printf "%s" "$out" | grep -q "missing environment variable GIT_"' "$out"
 check "the summary is the one last line, naming what loaded" \
   '[ "$(printf "%s\n" "$out" | grep -c "^→ loaded: ")" -eq 1 ] \
-   && printf "%s\n" "$out" | tail -n 1 | grep -q "^→ loaded: setup [^;]*; workspace [0-9a-f]*; tools: claude-code; env: GIT_AUTHOR_NAME, GIT_AUTHOR_EMAIL, GIT_COMMITTER_NAME, GIT_COMMITTER_EMAIL, PRESENT_TOKEN$"' "$out"
+   && printf "%s\n" "$out" | tail -n 1 | grep -q "^→ loaded: setup [^;]* in $root; workspace [0-9a-f]* in $home/ws; tools: claude-code; env: GIT_AUTHOR_NAME, GIT_AUTHOR_EMAIL, GIT_COMMITTER_NAME, GIT_COMMITTER_EMAIL, PRESENT_TOKEN$"' "$out"
 check "no report line repeats, and ai-sync's tools line stays internal" \
   '[ -z "$(printf "%s\n" "$out" | sort | uniq -d)" ] && ! printf "%s\n" "$out" | grep -q "^tools: "' "$out"
 check "no variable value appears in the output" '! printf "%s" "$out" | grep -q "$present"' "$out"
@@ -136,7 +136,7 @@ import json,sys
 d=json.load(sys.stdin)
 assert sorted(d)==[\"hookSpecificOutput\", \"systemMessage\"], d
 m=d[\"systemMessage\"]
-assert \"\\n\" not in m and m.startswith(\"loaded: setup \") and \"; workspace \" in m
+assert \"\\n\" not in m and m.startswith(\"loaded: setup \") and \" in $root; workspace \" in m and \" in $home/ws; \" in m
 assert m.endswith(\"; tools: claude-code; env: GIT_AUTHOR_NAME, GIT_AUTHOR_EMAIL, GIT_COMMITTER_NAME, GIT_COMMITTER_EMAIL\"), m
 c=d[\"hookSpecificOutput\"][\"additionalContext\"]
 assert c==\"Cloud-session setup (setup/cloud.sh) at session start: \"+m, c
@@ -175,7 +175,7 @@ check "failed clone: session start gives the agent the error" \
 import json,sys
 d=json.load(sys.stdin)
 assert \"403\" in d[\"hookSpecificOutput\"][\"additionalContext\"]
-assert \"; workspace not loaded; \" in d[\"systemMessage\"].split(\"\\n\")[0]
+assert \"; workspace not loaded ($home/ws); \" in d[\"systemMessage\"].split(\"\\n\")[0]
 "' "$out"
 
 # ── Refusals ─────────────────────────────────────────────────────────────────
