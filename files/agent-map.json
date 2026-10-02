@@ -1,5 +1,5 @@
 {
-  "_note": "Managed by setup (tasks/09-ai-config.yml). Authoritative, data-driven sync manifest — read natively by Ansible (include_vars) and by ~/bin/ai-sync and ~/bin/ai-harvest (json). Adding a tool or class is a data edit here; the engines never enumerate tools. Edit the source in the setup repo, not the deployed copy.",
+  "_note": "Managed by setup (tasks/09-ai-config.yml). Authoritative, data-driven sync manifest — read by ~/bin/ai-sync and ~/bin/ai-harvest (json). Adding a tool or class is a data edit here; the engines never enumerate tools. Edit the source in the setup repo, not the deployed copy.",
 
   "methods": {
     "link": "symlink target -> hub source (tool reads the source's native format from that path)",
@@ -7,6 +7,22 @@
     "generate": "ai-sync renders the hub source into the target's own format; dispatch on 'format'",
     "wrap": "ai-sync wraps a shared prompt body into the target's packaging; dispatch on 'format'",
     "ignore": "setup does nothing to this path (no hook here, or nothing to sync)"
+  },
+
+  "classes": {
+    "instructions": "the always-on instruction file (AGENTS.md, with rules/ alongside)",
+    "rules": "the topical partition of the instruction set (see hub._note)",
+    "mcp": "MCP server definitions (mcp.json)",
+    "commands": "slash commands",
+    "skills": "skills",
+    "agents": "agent definitions a tool spawns",
+    "session-start": "a hook the tool runs when a session starts; its source is the refresh command (ai-sync --session-start-command), not a hub file"
+  },
+
+  "scenarios": {
+    "local": "the operator's own machine, set up by setup.sh",
+    "cloud": "a hosted AI agent's container, set up by cloud.sh",
+    "_note": "An entry's 'scenarios' list names the scenarios it applies to; an entry without it applies to both. ai-sync --scenario selects the running one."
   },
 
   "lanes": {
@@ -52,24 +68,25 @@
   "entries": {
     "distribute": [
       {"tool": "claude-code", "scope": "user", "class": "instructions", "path": "~/.claude/CLAUDE.md", "sync": "import", "source": "AGENTS.md", "note": "Claude rewrites this file when saving memory, so a stub, not a symlink."},
-      {"tool": "claude-code", "scope": "user", "class": "mcp", "path": "~/.claude.json", "sync": "generate", "source": "mcp.json", "format": "mcp-json", "key": "mcpServers", "create": false, "note": "Holds far more than MCP; merge only, never create from scratch."},
+      {"tool": "claude-code", "scope": "user", "class": "mcp", "path": "~/.claude.json", "sync": "generate", "source": "mcp.json", "format": "mcp-json", "key": "mcpServers", "create": false, "note": "Holds far more than MCP; merge only, never create from scratch.", "scenarios": ["local"]},
       {"tool": "claude-code", "scope": "user", "class": "commands", "path": "~/.claude/commands", "sync": "link", "source": "commands"},
       {"tool": "claude-code", "scope": "user", "class": "skills", "path": "~/.claude/skills", "sync": "link", "source": "skills"},
       {"tool": "claude-code", "scope": "user", "class": "agents", "path": "~/.claude/agents", "sync": "link", "source": "agents", "note": "Claude calls these 'subagents' — that names the spawn relationship, not the artifact."},
+      {"tool": "claude-code", "scope": "user", "class": "session-start", "path": "~/.claude/settings.json", "sync": "generate", "format": "claude-session-start", "scenarios": ["cloud"], "note": "A SessionStart hook (startup, resume) that re-runs cloud.sh; merged into settings.json, add-only."},
 
       {"tool": "openai-codex", "scope": "user", "class": "instructions", "path": "~/.codex/AGENTS.md", "sync": "link", "source": "AGENTS.md"},
-      {"tool": "openai-codex", "scope": "user", "class": "mcp", "path": "~/.codex/config.toml", "sync": "generate", "source": "mcp.json", "format": "mcp-toml", "table": "mcp_servers"},
+      {"tool": "openai-codex", "scope": "user", "class": "mcp", "path": "~/.codex/config.toml", "sync": "generate", "source": "mcp.json", "format": "mcp-toml", "table": "mcp_servers", "scenarios": ["local"]},
       {"tool": "openai-codex", "scope": "user", "class": "commands", "path": "~/.codex/prompts", "sync": "link", "source": "commands", "note": "Custom prompts (Markdown)."},
 
       {"tool": "gemini-cli", "scope": "user", "class": "instructions", "path": "~/.gemini/GEMINI.md", "sync": "link", "source": "AGENTS.md", "note": "Or set contextFileName to AGENTS.md in settings.json."},
-      {"tool": "gemini-cli", "scope": "user", "class": "mcp", "path": "~/.gemini/settings.json", "sync": "generate", "source": "mcp.json", "format": "mcp-json", "key": "mcpServers"},
+      {"tool": "gemini-cli", "scope": "user", "class": "mcp", "path": "~/.gemini/settings.json", "sync": "generate", "source": "mcp.json", "format": "mcp-json", "key": "mcpServers", "scenarios": ["local"]},
       {"tool": "gemini-cli", "scope": "user", "class": "commands", "path": "~/.gemini/commands", "sync": "ignore", "note": "TOML, not Markdown; needs a wrap emitter."},
 
       {"tool": "cursor", "scope": "user", "class": "instructions", "path": null, "sync": "ignore", "note": "User Rules are app-managed; shared instructions reach Cursor at workspace scope via AGENTS.md."},
-      {"tool": "cursor", "scope": "user", "class": "mcp", "path": "~/.cursor/mcp.json", "sync": "generate", "source": "mcp.json", "format": "mcp-json", "key": "mcpServers"},
+      {"tool": "cursor", "scope": "user", "class": "mcp", "path": "~/.cursor/mcp.json", "sync": "generate", "source": "mcp.json", "format": "mcp-json", "key": "mcpServers", "scenarios": ["local"]},
 
       {"tool": "github-copilot", "scope": "user", "class": "instructions", "path": null, "sync": "ignore", "note": "No copilot-specific instructions file is written: the CLI reads AGENTS.md (and .github/instructions/) from the hub via COPILOT_CUSTOM_INSTRUCTIONS_DIRS, exported to the shell profile, so the shared ~/.config/ai/AGENTS.md reaches it there. `copilot init` writes repo-level .github/copilot-instructions.md; the IDE extension's user instructions are app-managed."},
-      {"tool": "github-copilot", "scope": "user", "class": "mcp", "path": "~/.copilot/mcp-config.json", "sync": "generate", "source": "mcp.json", "format": "mcp-json", "key": "mcpServers", "note": "Copilot CLI user MCP config; top-level key 'mcpServers' (verified). The IDE extension's MCP is editor-managed separately."},
+      {"tool": "github-copilot", "scope": "user", "class": "mcp", "path": "~/.copilot/mcp-config.json", "sync": "generate", "source": "mcp.json", "format": "mcp-json", "key": "mcpServers", "note": "Copilot CLI user MCP config; top-level key 'mcpServers' (verified). The IDE extension's MCP is editor-managed separately.", "scenarios": ["local"]},
       {"tool": "github-copilot", "scope": "user", "class": "skills", "path": "~/.copilot/skills", "sync": "link", "source": "skills", "note": "Copilot CLI personal skills dir (verified via `copilot skill --help`: ~/.copilot/skills/) — SKILL.md files, same shape as the hub skills, symlinked in. Plugins (copilot plugin install) are tool-managed installed extensions, not distributed; they fall under the non-reusable wildcard."},
       {"tool": "github-copilot", "scope": "user", "class": "rules", "path": "~/.config/ai/.github/instructions", "sync": "wrap", "source": "rules", "format": "copilot-instructions", "note": "The CLI reads .github/instructions/*.instructions.md (applyTo frontmatter required — verified: a bare .md is ignored) from dirs in COPILOT_CUSTOM_INSTRUCTIONS_DIRS; it does not walk up parent dirs, hence the env var. ai-sync wraps each hub rule into an always-on (applyTo:'**') file here — a generated, ai-sync-owned directory: created/updated/pruned to match ai/rules/, a foreign same-named file reported as a conflict and never clobbered. The workspace-scope .github/instructions entry below stays for the IDE (repo-root)."},
 
@@ -77,7 +94,7 @@
       {"tool": "kimi-code", "scope": "user", "class": "instructions", "path": "~/.kimi-code/AGENTS.md", "sync": "ignore", "note": "Kimi-specific global, injected in addition to ~/.agents/AGENTS.md — deliberately not linked: both globals are merged into the prompt, so the shared content would land twice. Reserved for genuinely Kimi-only guidance, should any arise."},
 
       {"tool": "claude-code", "scope": "workspace", "class": "instructions", "path": "CLAUDE.md", "sync": "import", "source": "AGENTS.md"},
-      {"tool": "claude-code", "scope": "workspace", "class": "mcp", "path": ".mcp.json", "sync": "generate", "source": "mcp.json", "format": "mcp-json", "key": "mcpServers"},
+      {"tool": "claude-code", "scope": "workspace", "class": "mcp", "path": ".mcp.json", "sync": "generate", "source": "mcp.json", "format": "mcp-json", "key": "mcpServers", "scenarios": ["local"]},
       {"tool": "claude-code", "scope": "workspace", "class": "commands", "path": ".claude/commands", "sync": "link", "source": "commands"},
       {"tool": "claude-code", "scope": "workspace", "class": "skills", "path": ".claude/skills", "sync": "link", "source": "skills"},
       {"tool": "claude-code", "scope": "workspace", "class": "agents", "path": ".claude/agents", "sync": "link", "source": "agents"},
@@ -89,7 +106,7 @@
       {"tool": "gemini-cli", "scope": "workspace", "class": "commands", "path": ".gemini/commands", "sync": "ignore", "note": "TOML — needs a wrap emitter."},
 
       {"tool": "cursor", "scope": "workspace", "class": "instructions", "path": "AGENTS.md", "sync": "link", "source": "AGENTS.md", "note": "Cursor reads AGENTS.md natively."},
-      {"tool": "cursor", "scope": "workspace", "class": "mcp", "path": ".cursor/mcp.json", "sync": "generate", "source": "mcp.json", "format": "mcp-json", "key": "mcpServers"},
+      {"tool": "cursor", "scope": "workspace", "class": "mcp", "path": ".cursor/mcp.json", "sync": "generate", "source": "mcp.json", "format": "mcp-json", "key": "mcpServers", "scenarios": ["local"]},
       {"tool": "cursor", "scope": "workspace", "class": "commands", "path": ".cursor/commands", "sync": "link", "source": "commands"},
       {"tool": "cursor", "scope": "workspace", "class": "rules", "path": ".cursor/rules", "sync": "ignore", "note": "Rules are the topical partition of the always-on instruction set (see hub._note), not a glob-scoped feature; they reach Cursor with AGENTS.md through the instructions channel. Cursor's rules directory with alwaysApply:true is an optional native target — emitter not built."},
 
