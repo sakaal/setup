@@ -68,10 +68,12 @@ changes only to move to a newer tag.
    name as on the local host.
 3. Deploy `agent-map.json` into the hub and run the shared wiring engine
    (CLOUD-WIRING) from the setup clone; the wiring includes the session-start
-   hook (CLOUD-REFRESH).
+   hook (CLOUD-REFRESH). It runs even when the workspace clone failed, without
+   the hub, so the hook is registered and the next session start retries.
 4. Check the expected variables (CLOUD-ENV-VARS).
 5. Report each outcome as `→` / `!` / `✗` lines, and exit 0 on every path so no
-   problem blocks the session.
+   problem blocks the session. A failed clone's `✗` line carries the first line
+   of git's error, with any credentials in a URL removed.
 
 **CLOUD-REFRESH**: Every session start runs `cloud.sh` again from the setup
 clone, through the owning tool's session-start hook. The platform runs the

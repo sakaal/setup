@@ -87,10 +87,10 @@ net() {
 # working tree is clean and the move is a fast-forward; anything else (dirty,
 # detached at a tag, diverged, offline) leaves the working copy as it is.
 maybe_ff() {
-  local repo="$1" branch upstream
-  branch="$(git -C "$repo" symbolic-ref --short -q HEAD)" || return 0
+  local repo="$1" upstream
+  git -C "$repo" symbolic-ref -q HEAD >/dev/null || return 0
   upstream="$(git -C "$repo" rev-parse --abbrev-ref --symbolic-full-name '@{u}' 2>/dev/null)" || return 0
-  net git -C "$repo" fetch --quiet origin "$branch" 2>/dev/null \
+  net git -C "$repo" fetch --quiet "${upstream%%/*}" "${upstream#*/}" 2>/dev/null \
     || { warn "could not fetch $repo; using it as is"; return 0; }
   git -C "$repo" diff-index --quiet HEAD 2>/dev/null || return 0
   git -C "$repo" merge-base --is-ancestor HEAD "$upstream" 2>/dev/null || return 0
@@ -100,6 +100,15 @@ maybe_ff() {
   else
     warn "could not fast-forward $repo; using it as is"
   fi
+}
+
+# git_error OUTPUT STATUS — the first line of a failed git command's error
+# output for a ✗ message, with any credentials in a URL removed.
+git_error() {
+  local line="${1%%$'\n'*}"
+  line="$(printf '%s' "$line" | sed -E 's#://[^/@[:space:]]+@#://#g')"
+  (($2 == 124)) && line="timed out${line:+: $line}"
+  printf '%s' "${line:-exit status $2}"
 }
 
 is_setup_clone() {
@@ -122,8 +131,10 @@ if ! is_setup_clone "$SCRIPT_DIR"; then
   if [[ ! -e "$SETUP_DIR" ]]; then
     ref="${SETUP_REF:-master}"
     mkdir -p "$(dirname "$SETUP_DIR")"
-    if ! net git clone --quiet --branch "$ref" "$SETUP_URL" "$SETUP_DIR" 2>/dev/null; then
-      err "could not clone setup ($ref) into $SETUP_DIR"
+    out="$(net git clone --quiet --branch "$ref" "$SETUP_URL" "$SETUP_DIR" 2>&1)"
+    status=$?
+    if ((status)); then
+      err "could not clone setup ($ref) into $SETUP_DIR: $(git_error "$out" "$status")"
       finish
     fi
     info "cloned setup ($ref) into $SETUP_DIR"
@@ -166,11 +177,13 @@ ws="$HOME/$ws_name"
 # ws_ok: only a clone of the workspace repo is wired from.
 ws_ok=false
 if [[ ! -e "$ws" ]]; then
-  if net git clone --quiet "$https_url" "$ws" 2>/dev/null; then
+  out="$(net git clone --quiet "$https_url" "$ws" 2>&1)"
+  status=$?
+  if ((status == 0)); then
     info "cloned $https_url into $ws"
     ws_ok=true
   else
-    err "could not clone $https_url; the shared AI instructions are not loaded"
+    err "could not clone $https_url: $(git_error "$out" "$status"); the shared AI instructions are not loaded"
   fi
 elif [[ -d "$ws/.git" && "$(normalize "$(git -C "$ws" remote get-url origin 2>/dev/null)")" == "$norm" ]]; then
   maybe_ff "$ws"
@@ -184,24 +197,25 @@ hook_cmd="$(printf '%q' "$SCRIPT_DIR/cloud.sh") --session-start"
 [[ -n "$WORKSPACE_ARG" ]] && hook_cmd+=" $(printf '%q' "$WORKSPACE_ARG")"
 [[ -n "${WORKSPACE_DIR:-}" ]] && hook_cmd="WORKSPACE_DIR=$(printf '%q' "$WORKSPACE_DIR") $hook_cmd"
 
-if $ws_ok; then
-  if ! { mkdir -p "$HOME/.config/ai" \
-         && cp "$SCRIPT_DIR/files/agent-map.json" "$HOME/.config/ai/agent-map.json"; }; then
-    warn "could not deploy the sync manifest into ~/.config/ai"
-  fi
-  sync_out="$(python3 "$SCRIPT_DIR/files/ai-sync" --scenario cloud \
-    --manifest "$SCRIPT_DIR/files/agent-map.json" --workspace "$ws" \
-    --session-start-command "$hook_cmd" 2>&1)"
-  sync_rc=$?
-  while IFS= read -r line; do
-    [[ -n "$line" ]] || continue
-    case "$line" in
-      →*|!*|✗*) report "$line" ;;
-      *) report "! $line" ;;
-    esac
-  done <<<"$sync_out"
-  ((sync_rc == 0 || sync_rc == 2)) || err "ai-sync failed (exit $sync_rc)"
+# Runs even without the workspace, so the session-start hook is registered and
+# the next session start retries what failed here.
+sync_args=(--scenario cloud --manifest "$SCRIPT_DIR/files/agent-map.json"
+           --session-start-command "$hook_cmd")
+$ws_ok && sync_args+=(--workspace "$ws")
+if ! { mkdir -p "$HOME/.config/ai" \
+       && cp "$SCRIPT_DIR/files/agent-map.json" "$HOME/.config/ai/agent-map.json"; }; then
+  warn "could not deploy the sync manifest into ~/.config/ai"
 fi
+sync_out="$(python3 "$SCRIPT_DIR/files/ai-sync" "${sync_args[@]}" 2>&1)"
+sync_rc=$?
+while IFS= read -r line; do
+  [[ -n "$line" ]] || continue
+  case "$line" in
+    →*|!*|✗*) report "$line" ;;
+    *) report "! $line" ;;
+  esac
+done <<<"$sync_out"
+((sync_rc == 0 || sync_rc == 2)) || err "ai-sync failed (exit $sync_rc)"
 
 # ── Expected environment variables ───────────────────────────────────────────
 # Presence only: a value is never printed, logged or compared beyond "empty".
