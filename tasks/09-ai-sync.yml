@@ -1,43 +1,17 @@
 ---
-# 09-ai-sync.yml — wire each present tool to the hub and render generated
-# formats, driven by the manifest (ai_map). Imported by 09-ai-config.yml.
+# 09-ai-sync.yml — deploy the AI tooling and run ai-sync, which builds the hub,
+# wires each present tool to it and renders generated formats, all driven by
+# the manifest. Imported by 09-ai-config.yml.
 #
-# link/import entries (here): point a tool's own path at a hub source,
-# non-destructively — absent/empty/already-ours → act/noop; real content →
-# recorded and halted, never clobbered.
-# generate/wrap entries: rendered by ~/bin/ai-sync (deployed and run below).
-# ~/bin/ai-harvest (harvest-lane catalog) and ~/bin/ai-distill (the
-# distillation prepare/accept bookends) are deployed alongside but never run
-# by the playbook — harvesting and distillation are curation-time actions,
-# not part of the bootstrap.
+# Wiring is non-destructive: absent/empty/already-ours → act/noop; real content
+# → reported and halted on, never clobbered. ~/bin/ai-harvest (harvest-lane
+# catalog) and ~/bin/ai-distill (the distillation prepare/accept bookends) are
+# deployed alongside but never run by the playbook — harvesting and
+# distillation are curation-time actions, not part of the bootstrap.
 #
 # Only user-scope entries are wired. Workspace-scope entries in the manifest
 # document locations applied at the workspace root (inherited by the projects
 # inside), not by setup.
-
-- name: Reset the wiring-conflict accumulator
-  ansible.builtin.set_fact:
-    ai_wire_conflicts: []
-
-- name: Wire each user-scope link/import entry (distribute lane only)
-  ansible.builtin.include_tasks: 09-ai-wire-one.yml
-  loop: >-
-    {{ ai_map.entries.distribute
-       | selectattr('scope', 'match', 'user($|:)')
-       | selectattr('sync', 'in', ['link', 'import'])
-       | list }}
-  loop_control:
-    loop_var: entry
-    label: "{{ entry.tool }}:{{ entry.class }}"
-
-- name: Halt on wiring conflicts (nothing was overwritten)
-  ansible.builtin.fail:
-    msg: >-
-      Refusing to overwrite existing tool file(s) that hold content and are not
-      the shared link/stub: {{ ai_wire_conflicts | join(', ') }}. Reconcile each
-      (move its content into the workspace repo's ai/, remove the local path)
-      and re-run — or skip with --skip-tags ai-sync.
-  when: ai_wire_conflicts | length > 0
 
 - name: Ensure ~/bin exists
   ansible.builtin.file:
@@ -84,14 +58,38 @@
     - {src: ai-terms.txt, dest: terms.txt}
     - {src: ai-terms.NOTICE, dest: terms.NOTICE}
 
-- name: Render generated formats into each present tool
+# Runs the repo's copy against the repo's manifest, so --check (where the
+# deploys above are skipped) previews the same engine with --dry-run.
+- name: Wire present tools and render generated formats (local scenario)
   ansible.builtin.command:
-    cmd: "{{ home_dir }}/bin/ai-sync"
+    cmd: >-
+      python3 "{{ playbook_dir }}/files/ai-sync" --scenario local
+      --manifest "{{ playbook_dir }}/files/agent-map.json"
+      --workspace "{{ home_dir }}/{{ workspace_dir }}"
+      {{ '--dry-run' if ansible_check_mode else '' }}
   register: ai_sync_run
-  changed_when: "'changed:' in ai_sync_run.stdout"
+  changed_when: >-
+    '→ changed:' in ai_sync_run.stdout
+    or '→ would change:' in ai_sync_run.stdout
+  failed_when: false
+  check_mode: false
 
-- name: Render report
+- name: Sync report
   ansible.builtin.debug:
     msg: "{{ ai_sync_run.stdout_lines }}"
   when: ai_sync_run.stdout_lines | default([]) | length > 0
+
+- name: Halt on wiring conflicts (nothing was overwritten)
+  ansible.builtin.fail:
+    msg: >-
+      Refusing to overwrite existing path(s) that hold content and are not the
+      shared hub link, tool link or stub (see the conflicts above). Reconcile
+      each (move its content into ai/ in the workspace repo, remove the local
+      path) and re-run — or skip with --skip-tags ai-sync.
+  when: ai_sync_run.rc == 2
+
+- name: Halt when ai-sync fails
+  ansible.builtin.fail:
+    msg: "ai-sync failed (exit {{ ai_sync_run.rc }}): {{ ai_sync_run.stderr }}"
+  when: ai_sync_run.rc not in [0, 2]
 ...
