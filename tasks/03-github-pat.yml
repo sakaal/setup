@@ -33,9 +33,9 @@
     # package). git auth works through the credential helper above regardless;
     # the tasks below only set up the gh CLI's own auth, so they no-op cleanly
     # when gh isn't installed.
-    - name: Detect whether the gh CLI is installed
-      ansible.builtin.shell:
-        cmd: command -v gh
+    - name: Detect whether the gh CLI is installed and runs
+      ansible.builtin.command:
+        cmd: gh --version
       register: gh_present
       changed_when: false
       failed_when: false

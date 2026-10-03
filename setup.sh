@@ -50,6 +50,11 @@ ok()   { printf '  \xe2\x9c\x93 %s\n' "$*"; }
 warn() { printf '  ! %s\n' "$*" >&2; }
 fail() { printf '  \xe2\x9c\x97 %s\n' "$*" >&2; exit 1; }
 
+# runnable CMD — true if CMD is on PATH *and* executes. `command -v` alone
+# accepts a binary this machine can't run (e.g. an Intel-only build on Apple
+# Silicon without Rosetta), so presence checks run the tool instead.
+runnable() { "$1" --version >/dev/null 2>&1; }
+
 # maybe_ff_update <repo-dir> <branch>
 # Fast-forward update of a local working copy *only* when it is safe:
 # repo is a git working tree, fetch succeeds, working tree is clean, HEAD
@@ -163,7 +168,7 @@ ensure_build_tools() {
       ok "Command Line Tools installed"
       ;;
     Linux)
-      command -v git >/dev/null 2>&1 && return 0
+      runnable git && return 0
       info "Installing git via distro package manager (will prompt for sudo)..."
       case "$(detect_linux_distro_family)" in
         debian) sudo apt-get update -qq && sudo apt-get install -y git && APT_UPDATED=1 ;;
@@ -220,7 +225,7 @@ else
   # Case 2, destination free: self-bootstrap by cloning into $SETUP_DIR.
   REF="${SETUP_REF:-master}"
   ensure_build_tools
-  command -v git >/dev/null 2>&1 || fail "git not available; cannot self-bootstrap"
+  runnable git || fail "no runnable git on PATH; cannot self-bootstrap"
 
   info "Cloning setup into $SETUP_DIR (ref: $REF)..."
   mkdir -p "$(dirname "$SETUP_DIR")"
@@ -299,7 +304,7 @@ case "$PLATFORM" in
     fi
     ;;
   linux)
-    if command -v git >/dev/null 2>&1; then
+    if runnable git; then
       ok "git present"
     else
       ensure_build_tools
@@ -329,7 +334,7 @@ ensure_brew_on_path() {
 install_brew_tool() {
   local bin="$1"
   local formula="${2:-$1}"
-  if command -v "$bin" >/dev/null 2>&1; then
+  if runnable "$bin"; then
     ok "$bin present"
     if $UPGRADE; then
       info "Upgrading $bin..."
@@ -338,6 +343,7 @@ install_brew_tool() {
   else
     info "Installing $bin..."
     if run brew install "$formula"; then
+      hash -r 2>/dev/null || true   # drop a cached path to an unrunnable $bin
       ok "$bin installed"
     else
       warn "$bin: brew install failed (continuing)"
@@ -366,7 +372,7 @@ linux_pkg_install() {
 # user-level pip install on Linux distros that don't package it (pipx lives
 # only in EPEL on some RHEL-family releases).
 ensure_pipx() {
-  if command -v pipx >/dev/null 2>&1; then
+  if runnable pipx; then
     ok "pipx present"
     return 0
   fi
@@ -378,7 +384,7 @@ ensure_pipx() {
         arch) linux_pkg_install python-pipx ;;
         *)    linux_pkg_install pipx ;;
       esac
-      if ! command -v pipx >/dev/null 2>&1; then
+      if ! runnable pipx; then
         warn "pipx not available from the distro; installing at user level via pip"
         run python3 -m pip install --user pipx \
           || run python3 -m pip install --user --break-system-packages pipx \
@@ -387,7 +393,7 @@ ensure_pipx() {
       ;;
   esac
   hash -r 2>/dev/null || true
-  command -v pipx >/dev/null 2>&1 || $DRY_RUN || fail "pipx not on PATH after install"
+  runnable pipx || $DRY_RUN || fail "pipx not runnable after install"
   run pipx ensurepath >/dev/null 2>&1 || true
   ok "pipx installed"
 }
@@ -428,7 +434,7 @@ ensure_ansible() {
 # convenience `gh auth login` in stage 03; git auth itself goes through the
 # credential helper, so a gh failure must not abort the bootstrap.
 ensure_gh() {
-  if command -v gh >/dev/null 2>&1; then
+  if runnable gh; then
     ok "gh present"
     if [[ "$PLATFORM" == mac ]] && $UPGRADE; then
       info "Upgrading gh..."
@@ -458,7 +464,7 @@ ensure_gh() {
       esac
       ;;
   esac
-  if command -v gh >/dev/null 2>&1; then
+  if runnable gh; then
     ok "gh installed"
   else
     warn "gh unavailable — stage 03 will skip gh auth (git credential helper still works)"
@@ -468,7 +474,7 @@ ensure_gh() {
 # ensure_pass_cli — Proton Pass CLI. brew tap on macOS; Proton's official
 # installer (into ~/.local/bin) on Linux, since there is no native package.
 ensure_pass_cli() {
-  if command -v pass-cli >/dev/null 2>&1; then
+  if runnable pass-cli; then
     ok "pass-cli present"
     if $UPGRADE; then
       case "$PLATFORM" in
@@ -489,7 +495,7 @@ ensure_pass_cli() {
       ;;
   esac
   hash -r 2>/dev/null || true
-  command -v pass-cli >/dev/null 2>&1 || $DRY_RUN || fail "pass-cli not on PATH after install"
+  runnable pass-cli || $DRY_RUN || fail "pass-cli not runnable after install"
   ok "pass-cli installed"
 }
 
@@ -497,13 +503,13 @@ ensure_pass_cli() {
 
 case "$PLATFORM" in
   mac)
-    if command -v brew >/dev/null 2>&1; then
+    if runnable brew; then
       ok "Homebrew present"
     else
       info "Installing Homebrew..."
       run /bin/bash -c "$(curl -fsSL https://raw.githubusercontent.com/Homebrew/install/HEAD/install.sh)"
       ensure_brew_on_path
-      command -v brew >/dev/null 2>&1 || $DRY_RUN || fail "Homebrew not on PATH after install"
+      runnable brew || $DRY_RUN || fail "Homebrew not runnable after install"
       ok "Homebrew installed"
     fi
     ensure_brew_on_path
@@ -559,7 +565,7 @@ ensure_pipx
 
 case "$PLATFORM" in
   mac)   install_brew_tool git ;;
-  linux) command -v git >/dev/null 2>&1 && ok "git present" || linux_pkg_install git ;;
+  linux) runnable git && ok "git present" || linux_pkg_install git ;;
 esac
 
 ensure_gh
