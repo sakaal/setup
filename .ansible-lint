@@ -22,10 +22,6 @@ skip_list:
   # force), which ansible.builtin.git cannot express safely. See AGENTS.md.
   - command-instead-of-module
 
-  # `command -v <tool>` detection uses a shell builtin, so the shell module is
-  # required, not command; command-instead-of-shell misreads this as needless.
-  - command-instead-of-shell
-
   # A couple of loop inputs align dict values into columns with extra spaces
   # after a comma, for readability; yaml[commas] permits only one.
   - yaml[commas]
