@@ -9,6 +9,9 @@
   community.general.homebrew_cask:
     name: copilot-cli
     state: present
+    # The module's default searches /usr/local/bin first, which on Apple
+    # Silicon can be a stale Intel Homebrew; prefer the prefix setup.sh uses.
+    path: /opt/homebrew/bin:/usr/local/bin
   when: ansible_facts['system'] | default('') == "Darwin"
   tags: [ai-tools]
 
