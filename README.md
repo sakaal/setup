@@ -165,7 +165,9 @@ find) its own clone, and is ignored when you run from a working copy.
    and loops generically, so adding a tool is a manifest edit, not code. It
    points present tools at the hub via symlink/`@import` stub and renders the
    MCP list into each tool's own format — add-only, never overwriting existing
-   entries. Companions `~/bin/ai-harvest` and
+   entries. It also applies quality-neutral efficiency settings the manifest
+   names per tool (today Claude Code's one-hour prompt-cache TTL), adding a
+   missing key and leaving one you set differently as it is. Companions `~/bin/ai-harvest` and
    `~/bin/ai-distill` (deployed, never run by the bootstrap) support the
    learning loop — cataloging each tool's accumulated knowledge and distilling
    it back into the shared sources under human review. See

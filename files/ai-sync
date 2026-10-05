@@ -218,7 +218,7 @@ def emit_mcp_json(entry, source_path):
         added += 1
     if added:
         data[key] = existing
-        write_atomic(path, json.dumps(data, indent=2) + "\n")
+        write_atomic(path, json.dumps(data, indent=2, ensure_ascii=False) + "\n")
         changed.append("%s (+%d server(s))" % (path, added))
 
 
@@ -412,11 +412,54 @@ def emit_claude_session_start(entry, command):
     data["hooks"] = hooks
     if not os.path.isdir(os.path.dirname(path)):
         makedirs(os.path.dirname(path))
-    write_atomic(path, json.dumps(data, indent=2) + "\n")
+    write_atomic(path, json.dumps(data, indent=2, ensure_ascii=False) + "\n")
     changed.append("%s (+SessionStart hook)" % path)
 
 
+def same_json(a, b):
+    # JSON equality: Python's == takes true for 1 and false for 0, at any depth.
+    return json.dumps(a, sort_keys=True) == json.dumps(b, sort_keys=True)
+
+
+def emit_json_keys(entry, _source_path):
+    # Top-level settings carried in the entry's own "set" (no hub source): a
+    # missing key is added, an equal one is in sync, a different one is the
+    # operator's choice — reported as a conflict and left as-is.
+    wanted = entry.get("set")
+    if not isinstance(wanted, dict) or not wanted:
+        return
+    path = expand(entry["path"])
+    if os.path.exists(path):
+        data = load_json_file(path)
+        if data is None:
+            return
+    elif entry.get("create", True):
+        data = {}
+    else:
+        return
+    if not isinstance(data, dict):
+        sys.stderr.write("! skip %s: top level is not an object\n" % path)
+        return
+    added = []
+    for key, value in wanted.items():
+        if key not in data:
+            data[key] = value
+            added.append(key)
+        elif same_json(data[key], value):
+            insync.append("%s: %s" % (path, key))
+        else:
+            conflicts.append("%s: %s is %s, not %s (left as-is)" % (
+                path, key, json.dumps(data[key], ensure_ascii=False),
+                json.dumps(value, ensure_ascii=False)))
+    if added:
+        if not os.path.isdir(os.path.dirname(path)):
+            makedirs(os.path.dirname(path))
+        write_atomic(path, json.dumps(data, indent=2, ensure_ascii=False) + "\n")
+        changed.append("%s (+%s)" % (path, ", ".join(added)))
+
+
 EMITTERS = {
+    "json-keys": emit_json_keys,
     "mcp-json": emit_mcp_json,
     "mcp-toml": emit_mcp_toml,
     "copilot-instructions": emit_copilot_instructions,
@@ -480,7 +523,8 @@ def main(argv=None):
                 return
             emitter(entry, args.session_start_command)
         else:
-            emitter(entry, os.path.join(CONFIG, entry["source"]))
+            emitter(entry, os.path.join(CONFIG, entry["source"])
+                    if entry.get("source") else None)
 
     acted = False
     wired = []  # tools with an entry changed or already in place, in manifest order

@@ -16,7 +16,8 @@
     "commands": "slash commands",
     "skills": "skills",
     "agents": "agent definitions a tool spawns",
-    "session-start": "a hook the tool runs when a session starts; its source is the refresh command (ai-sync --session-start-command), not a hub file"
+    "session-start": "a hook the tool runs when a session starts; its source is the refresh command (ai-sync --session-start-command), not a hub file",
+    "efficiency": "quality-neutral settings that cut cost, latency or token use (e.g. prompt-cache lifetime), carried in the entry's own 'set' rather than a hub file and applied add-only. Settings that trade capability for cost (model, effort, fast mode) are not this class; they stay non-reusable."
   },
 
   "scenarios": {
@@ -73,6 +74,7 @@
       {"tool": "claude-code", "scope": "user", "class": "skills", "path": "~/.claude/skills", "sync": "link", "source": "skills"},
       {"tool": "claude-code", "scope": "user", "class": "agents", "path": "~/.claude/agents", "sync": "link", "source": "agents", "note": "Claude calls these 'subagents' — that names the spawn relationship, not the artifact."},
       {"tool": "claude-code", "scope": "user", "class": "session-start", "path": "~/.claude/settings.json", "sync": "generate", "format": "claude-session-start", "scenarios": ["cloud"], "note": "A SessionStart hook (startup, resume) that re-runs cloud.sh; merged into settings.json, add-only."},
+      {"tool": "claude-code", "scope": "user", "class": "efficiency", "path": "~/.claude/settings.json", "sync": "generate", "format": "json-keys", "set": {"promptCacheTtl": "1h"}, "note": "One-hour prompt-cache TTL for the main conversation (Claude Code v2.1.242+). A Claude subscription already gets it within plan usage; this keeps it past plan usage and gives it to API-key and cloud-provider logins, which default to five minutes. One-hour cache writes cost more, so it pays off when sessions often idle past five minutes."},
 
       {"tool": "openai-codex", "scope": "user", "class": "instructions", "path": "~/.codex/AGENTS.md", "sync": "link", "source": "AGENTS.md"},
       {"tool": "openai-codex", "scope": "user", "class": "mcp", "path": "~/.codex/config.toml", "sync": "generate", "source": "mcp.json", "format": "mcp-toml", "table": "mcp_servers", "scenarios": ["local"]},

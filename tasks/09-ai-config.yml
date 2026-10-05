@@ -10,7 +10,8 @@
 #                  sources (AGENTS.md, mcp.json, commands/, skills/, agents/,
 #                  rules/), non-destructively.
 #   link/import  — points each present tool's own path at a hub source.
-#   generate/wrap — renders hub sources into tool-specific formats.
+#   generate/wrap — renders hub sources (or settings an entry carries itself)
+#                  into tool-specific formats.
 #
 # Two taggable parts: ai-config (manifest deploy, below) and ai-sync (engine
 # deploy and run, 09-ai-sync.yml).

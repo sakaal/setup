@@ -88,7 +88,9 @@ reset
 out=$(sync --scenario local --session-start-command "$hook")
 check "local: MCP servers merged for a present tool" \
   'grep -q demo-mcp "$home/.gemini/settings.json" 2>/dev/null' "$out"
-check "local: no session-start hook" '[ ! -e "$home/.claude/settings.json" ]' "$out"
+check "local: no session-start hook" '! grep -q SessionStart "$home/.claude/settings.json"' "$out"
+check "local: efficiency settings added" \
+  'python3 -c "import json,sys; assert json.load(open(sys.argv[1]))[\"promptCacheTtl\"]==\"1h\"" "$home/.claude/settings.json"' "$out"
 
 reset
 out=$(sync --scenario cloud --session-start-command "$hook"); rc=$?
@@ -114,7 +116,11 @@ out=$(sync --scenario cloud --session-start-command "$hook"); rc=$?
 check "cloud: an earlier registration is reported, exit 0" \
   '[ $rc -eq 0 ] && printf "%s" "$out" | grep -q "conflict: .*SessionStart runs /old/cloud.sh"' "$out"
 check "cloud: the earlier registration is untouched" \
-  '[ "$(cat "$home/.claude/settings.json")" = "$before" ]'
+  'python3 -c "
+import json,sys
+a=json.loads(sys.argv[1]); b=json.load(open(sys.argv[2]))
+assert a[\"hooks\"]==b[\"hooks\"] and b[\"model\"]==\"x\"
+" "$before" "$home/.claude/settings.json"'
 
 reset
 printf '{"model": "x"}\n' > "$home/.claude/settings.json"
@@ -124,6 +130,56 @@ check "cloud: other settings are kept when the hook is merged in" \
 import json,sys
 d=json.load(open(sys.argv[1])); assert d[\"model\"]==\"x\" and d[\"hooks\"][\"SessionStart\"]
 " "$home/.claude/settings.json"' "$out"
+
+reset
+printf '{"name": "Säkäri ✓"}\n' > "$home/.claude/settings.json"
+out=$(sync --scenario cloud --session-start-command "$hook")
+check "cloud: non-ASCII settings text is kept as written, not escaped" \
+  'grep -q "Säkäri ✓" "$home/.claude/settings.json"' "$(cat "$home/.claude/settings.json")"
+
+# ── Efficiency settings (json-keys) ─────────────────────────────────────────
+reset
+printf '{"promptCacheTtl": "5m", "model": "x"}\n' > "$home/.claude/settings.json"
+before=$(cat "$home/.claude/settings.json")
+out=$(sync --scenario local); rc=$?
+check "efficiency: an operator value is reported, exit 0" \
+  '[ $rc -eq 0 ] && printf "%s" "$out" | grep -q "conflict: .*promptCacheTtl is \"5m\", not \"1h\""' "$out"
+check "efficiency: the operator value is untouched" \
+  '[ "$(cat "$home/.claude/settings.json")" = "$before" ]'
+
+python3 - "$root/files/agent-map.json" "$tmp/bool-map.json" <<'EOF'
+import json, sys
+m = json.load(open(sys.argv[1]))
+m["entries"]["distribute"] = [{"tool": "claude-code", "scope": "user", "class": "efficiency",
+    "path": "~/.claude/settings.json", "sync": "generate", "format": "json-keys", "set": {"flag": True}}]
+json.dump(m, open(sys.argv[2], "w"))
+EOF
+reset
+printf '{"flag": 1}\n' > "$home/.claude/settings.json"
+out=$(HOME="$home" python3 "$root/files/ai-sync" --manifest "$tmp/bool-map.json" 2>&1)
+check "efficiency: JSON 1 is not taken for true" \
+  'printf "%s" "$out" | grep -q "conflict: .*flag is 1, not true"' "$out"
+
+reset
+: > "$home/.claude/settings.json"
+out=$(sync --scenario local)
+check "efficiency: an empty settings file is treated as {}" \
+  'grep -q "\"promptCacheTtl\": \"1h\"" "$home/.claude/settings.json"' "$out"
+out=$(sync --scenario local)
+check "efficiency: a second run changes nothing" \
+  '! printf "%s" "$out" | grep -q "settings.json (+"' "$out"
+
+reset
+echo '[1]' > "$home/.claude/settings.json"
+out=$(sync --scenario local)
+check "efficiency: a non-object settings file is skipped untouched" \
+  '[ "$(cat "$home/.claude/settings.json")" = "[1]" ] && printf "%s" "$out" | grep -q "skip .*top level is not an object"' "$out"
+
+reset
+echo '{bad' > "$home/.claude/settings.json"
+out=$(sync --scenario local)
+check "efficiency: invalid JSON is reported and left untouched" \
+  '[ "$(cat "$home/.claude/settings.json")" = "{bad" ] && printf "%s" "$out" | grep -q "cannot read"' "$out"
 
 # ── Reported tools ───────────────────────────────────────────────────────────
 reset
@@ -138,6 +194,7 @@ check "report-tools: local names each wired tool in manifest order" \
 
 reset
 echo "my notes" > "$home/.claude/CLAUDE.md"
+printf '{"promptCacheTtl": "5m"}\n' > "$home/.claude/settings.json"
 out=$(sync --scenario local --report-tools)
 check "report-tools: a tool with only a conflict is not named" \
   '[ "$(printf "%s\n" "$out" | tail -n 1)" = "tools: gemini-cli" ]' "$out"

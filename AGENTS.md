@@ -42,11 +42,13 @@ they are realized here, and cites them rather than restating them.
    tool keeps — configuration, data, or runtime state — is represented in
    `agent-map.json`, under its lane:
    - **distribute** — one shared source fanned out to many tools (instructions,
-     MCP, commands, skills, agents); applied automatically by the sync engine.
+     MCP, commands, skills, agents, efficiency settings); applied automatically
+     by the sync engine.
    - **harvest** — knowledge the tool accumulates (memory, session history);
      cataloged read-only by `~/bin/ai-harvest`, then distilled *up* into the
      distribute sources by human-curated runs, never pushed down.
-   - **non-reusable** — settings, model, toggles; being tool-bound wouldn't
+   - **non-reusable** — settings, model, toggles (bar the quality-neutral
+     efficiency class, which is distributed); being tool-bound wouldn't
      stop translation, but this content has no meaning outside its tool, so we
      don't try. An explicit record that it is intentionally left alone.
 
