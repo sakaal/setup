@@ -41,6 +41,7 @@ Rules:
   verifiable, at the broadest abstraction the evidence supports — the general
   principle covering the class of cases, not the observed instance. The source
   is a non-limiting example, never a limitation folded into the statement.
+  Brief examples (`e.g. …`) that make the statement concrete are allowed.
 - **Never let an identifier into `generalized`.** If you cannot phrase it
   without the identifier, it is project-specific.
 - **Flag, don't clean, risk.** A high `opacity_score`, an instruction-shaped

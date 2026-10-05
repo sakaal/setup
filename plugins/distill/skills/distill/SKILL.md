@@ -144,7 +144,11 @@ community and covers its scope rather than one incident.
   §112(b)). Promote the general principle that covers the whole class of cases,
   not the observed instance. The source memory is the *non-limiting
   embodiment* — kept as provenance, never imported into the statement as a
-  limitation. Do not over-generalize past what the evidence supports.
+  limitation. Brief examples (`e.g. …`) are allowed after the statement to make
+  it concrete: marked as non-limiting, they illustrate the principle without
+  narrowing it, and may name a public tool or construct the statement itself
+  does not — never a `denylist` identifier. Do not over-generalize past what
+  the evidence supports.
 - **Singular, verifiable, unambiguous** (29148 characteristics). One need per
   item; phrased so compliance is checkable; no weak or open-ended words
   ("user-friendly", "flexible", "as appropriate", "etc.", "and/or", escape
