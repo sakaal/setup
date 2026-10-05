@@ -145,9 +145,8 @@ community and covers its scope rather than one incident.
   not the observed instance. The source memory is the *non-limiting
   embodiment* — kept as provenance, never imported into the statement as a
   limitation. Brief non-limiting examples (`e.g. …`) may follow the statement
-  to make it concrete; they may name a public tool or construct, never a
-  `denylist` identifier. Do not over-generalize past what the evidence
-  supports.
+  to make it concrete, and may name a public tool or construct. Do not
+  over-generalize past what the evidence supports.
 - **Singular, verifiable, unambiguous** (29148 characteristics). One need per
   item; phrased so compliance is checkable; no weak or open-ended words
   ("user-friendly", "flexible", "as appropriate", "etc.", "and/or", escape
