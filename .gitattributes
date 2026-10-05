@@ -1,0 +1,5 @@
+# .gitattributes — LF line endings in every checkout, whatever the client's
+# core.autocrlf. A Windows checkout can then be operated in place from within
+# WSL (or any bash), whose shell scripts would otherwise fail on CRLF. Binary
+# files are detected and left alone.
+* text=auto eol=lf

@@ -288,6 +288,8 @@ PAT mint, generation choices) belong here, not in `setup.sh`.
 
 - **Shell**: `set -uo pipefail` only (deliberately *not* `-e` — it conflicts
   with error isolation in batch tool installs).
+- **Line endings**: LF everywhere, enforced by `.gitattributes`
+  (`* text=auto eol=lf`) regardless of the client's `core.autocrlf`.
 - **Console output**: severity-tagged, prefixed `✗ / ! / →`.
 - **Task files**: two-digit numbering (`01-discover.yml`, `02-ssh-keys.yml`, …).
 - **Ansible modules**: FQCN (`ansible.builtin.command`, `community.general.ini_file`).
